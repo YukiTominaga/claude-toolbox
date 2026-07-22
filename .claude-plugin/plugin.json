@@ -1,0 +1,9 @@
+{
+  "name": "crystal",
+  "version": "0.1.0",
+  "description": "個人用 Claude Code アセット一式: skills / agents / commands / hooks",
+  "author": {
+    "name": "Yuki Tominaga",
+    "email": "yuki.tominaga.xen@gmail.com"
+  }
+}

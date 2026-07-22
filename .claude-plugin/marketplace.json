@@ -1,0 +1,18 @@
+{
+  "name": "yuki-local",
+  "owner": {
+    "name": "Yuki Tominaga",
+    "email": "yuki.tominaga.xen@gmail.com"
+  },
+  "metadata": {
+    "description": "個人ローカルマーケットプレイス",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "crystal",
+      "source": "./",
+      "description": "個人用 skills / agents / commands / hooks 一式"
+    }
+  ]
+}
