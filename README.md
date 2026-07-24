@@ -9,9 +9,9 @@
 | `skills/` | 自作スキル 11 個 |
 | `agents/` | `spec-critic`, `verifier` |
 | `commands/` | `/learn`, `/spec`, `/goal`, `/eval` |
-| `hooks/` | `hooks.json` + スクリプト 7 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / audit-config) |
+| `hooks/` | `hooks.json` + スクリプト 8 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / session-rules / audit-config) |
 | `scripts/` | 手動実行系スクリプト(`eval-run.sh`) |
-| `rules/` | コーディング規約・テスト方針など(`~/.claude/CLAUDE.md` から @ 参照で全セッションに適用) |
+| `rules/` | コーディング規約・テスト方針など(SessionStart hook `session-rules.sh` が全セッションに自動注入) |
 | `templates/` | spec / lessons / goal / eval-case テンプレート |
 
 > 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、`~/.claude/skills` 側でシンボリックリンクとして別管理する。
@@ -28,7 +28,8 @@ claude plugin install crystal@yuki-local --scope user
 - コマンド: `crystal:spec` / `crystal:learn` / `crystal:goal` / `crystal:eval`
 - サブエージェント: `crystal:spec-critic` / `crystal:verifier`
 - スキル 11 個は `crystal` 由来でロード
-- hooks(PreToolUse/PostToolUse/Stop)が自動登録される
+- hooks(SessionStart/PreToolUse/PostToolUse/Stop)が自動登録され、
+  `rules/*.md` はセッション開始時に自動でコンテキストへ注入される
 
 ## ゴール達成自動判定 (goal-gate)
 
@@ -74,5 +75,6 @@ claude plugin marketplace update yuki-local
 - hooks は `node` / `jq` が PATH にあることを前提とする。
 - goal-gate と eval の rubric 判定は `claude` CLI が PATH にあり認証済みであることを
   前提とする。満たさない場合は判定をスキップする(fail-open)。
-- `rules/` は `~/.claude/CLAUDE.md`(作成済み)からの @ 参照で全セッションに適用される。
+- `rules/` は SessionStart hook が注入するため、プラグインを有効化するだけで適用される。
+  外部の CLAUDE.md からの参照は不要。
 - `audit-config.sh` は手動実行用スクリプトで、`hooks.json` には登録していない。
