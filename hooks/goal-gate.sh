@@ -1,11 +1,15 @@
 #!/bin/bash
-# goal-gate.sh — ゴール達成の自動判定ゲート (Loop Engineering の /goal 相当)
+# goal-gate.sh — ゴール達成の自動判定ゲート (Loop Engineering の内側ループ)
 # Claude が応答を終えようとしたとき、.claude/goal.md (status: active) があれば
 # Haiku で完了条件の達成を判定し、未達なら exit 2 で差し戻す。
 #
 # stop-gate.sh と異なり stop_hook_active では素通ししない(意図的な差異):
 # 差し戻し後の再停止でも毎回判定するのがこのゲートの目的であり、
-# 無限ループ防止は round カウンタ + max_rounds が担う。
+# 暴走防止は以下の停止条件 4 層が担う:
+#   1. done-check   完了条件をすべて満たしたと判定 → status: done
+#   2. 反復上限     round > max_rounds → status: stalled
+#   3. 予算         経過時間 > max_minutes → status: stalled
+#   4. 無進捗       差分が変わらないラウンドが max_no_progress 回続く → status: stalled
 set -u
 
 # --- 再帰防止: 内側の claude -p (judge) から起動された場合は素通し ---
@@ -45,8 +49,30 @@ update_field() {
     { print }' "$GOAL" >"$GOAL.tmp" && mv "$GOAL.tmp" "$GOAL"
 }
 
+# frontmatter にキーが存在するか
+has_field() {
+  awk -v k="$1" '
+    /^---$/ { fm++; next }
+    fm==1 && $0 ~ "^"k":" { found=1 }
+    END { exit !found }' "$GOAL"
+}
+
+# キーが無ければ frontmatter の末尾に追加する(旧形式の goal.md との後方互換)
+ensure_field() {
+  has_field "$1" && return 0
+  awk -v line="$1: $2" '
+    /^---$/ { fm++; if (fm==2 && !done) { print line; done=1 } }
+    { print }' "$GOAL" >"$GOAL.tmp" && mv "$GOAL.tmp" "$GOAL"
+}
+
 status=$(get_field status)
 [ "$status" = "active" ] || exit 0
+
+ensure_field no_progress 0
+ensure_field max_no_progress 2
+ensure_field last_sig ""
+ensure_field started_epoch ""
+ensure_field max_minutes 60
 
 round=$(get_field round)
 max_rounds=$(get_field max_rounds)
@@ -61,6 +87,61 @@ if [ "$round" -gt "$max_rounds" ]; then
   update_field status stalled
   printf '{"systemMessage":"goal-gate: ラウンド上限 (%s) に達したため自動判定を停止しました (status: stalled)。/crystal:goal status で確認してください。"}\n' "$max_rounds"
   exit 0
+fi
+
+# --- 停止条件 3: 壁時計予算 ---
+# トークン課金額はシェルから観測できないため、予算は経過時間で表現する。
+# 開始時刻はこのフックが初回ラウンドで打刻する(date +%s は環境差がなく移植性が高い)。
+now_epoch=$(date +%s 2>/dev/null)
+started_epoch=$(get_field started_epoch)
+max_minutes=$(get_field max_minutes)
+case "$max_minutes" in '' | *[!0-9]*) max_minutes=60 ;; esac
+case "$started_epoch" in
+'' | *[!0-9]*)
+  [ -n "$now_epoch" ] && update_field started_epoch "$now_epoch"
+  ;;
+*)
+  if [ -n "$now_epoch" ] && [ "$max_minutes" -gt 0 ]; then
+    elapsed_min=$(((now_epoch - started_epoch) / 60))
+    if [ "$elapsed_min" -ge "$max_minutes" ]; then
+      update_field status stalled
+      printf '{"systemMessage":"goal-gate: 予算 (%s 分) を超えたため自動判定を停止しました (経過 %s 分, status: stalled)。/crystal:goal status で確認してください。"}\n' \
+        "$max_minutes" "$elapsed_min"
+      exit 0
+    fi
+  fi
+  ;;
+esac
+
+# --- 停止条件 4: 無進捗検知 ---
+# 作業ツリーの差分に変化がないラウンドは、判定器を呼ばずに差し戻す(コスト削減も兼ねる)。
+# git 管理下でない場合は署名が取れないのでこの層はスキップする。
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  sig=$( { git diff HEAD; git status --porcelain; } 2>/dev/null | cksum | tr -d ' ')
+  last_sig=$(get_field last_sig)
+  no_progress=$(get_field no_progress)
+  max_no_progress=$(get_field max_no_progress)
+  case "$no_progress" in '' | *[!0-9]*) no_progress=0 ;; esac
+  case "$max_no_progress" in '' | *[!0-9]*) max_no_progress=2 ;; esac
+
+  if [ -n "$last_sig" ] && [ "$sig" = "$last_sig" ]; then
+    no_progress=$((no_progress + 1))
+    update_field no_progress "$no_progress"
+    if [ "$no_progress" -ge "$max_no_progress" ]; then
+      update_field status stalled
+      printf '{"systemMessage":"goal-gate: 差分に変化がないラウンドが %s 回続いたため自動判定を停止しました (status: stalled)。/crystal:goal status で確認してください。"}\n' \
+        "$no_progress"
+      exit 0
+    fi
+    printf 'ゴール判定: 前ラウンドから作業ツリーの差分が変化していません (無進捗 %s/%s)。\n完了条件を満たす変更を加えること。これ以上進められない場合は、理由を述べて /crystal:goal abandon を提案すること。\n' \
+      "$no_progress" "$max_no_progress" >&2
+    exit 2
+  fi
+
+  update_field last_sig "$sig"
+  if [ "$no_progress" -ne 0 ]; then
+    update_field no_progress 0
+  fi
 fi
 
 # --- 判定材料の収集 ---

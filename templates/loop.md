@@ -1,0 +1,63 @@
+<!-- ループ契約テンプレート。プロジェクト直下に LOOP.md として配置する。
+     /crystal:loop next はこのファイルを読んで 1 イテレーションを回す。
+     周期実行そのものは組み込みの /loop や Routines に任せる(このファイルは契約だけを持つ)。 -->
+---
+status: active            # active | paused (paused の間 /crystal:loop next は何もしない)
+max_runs_per_day: 8       # 予算: 1日の実行回数上限。超えたら loop-guard.sh が止める
+max_minutes_per_run: 30   # 予算: 1イテレーションの壁時計上限。goal.md の max_minutes の既定値になる
+issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue のラベル (カンマ区切り)
+---
+# ループ契約
+
+## 1. トリガー (cadence)
+
+<!-- いつ回るか。実行そのものは組み込み機能に委譲する。例:
+     - 対話セッション中: /loop 30m /crystal:loop next
+     - 無人: Routines で平日 09:00 に /crystal:loop next
+     ここには「どの頻度で、いつまで回すか」を書く。 -->
+
+## 2. スコープ (open / closed)
+
+<!-- 1 イテレーションで触れてよい範囲。closed から始めること。
+     closed = 対象ディレクトリ・変更行数・触ってよいファイル種別が事前に決まっている状態。
+     open への昇格は verifier が「自分が見つけたはずの失敗」を実際に検知できた実績で獲得する。 -->
+
+- 触れてよい範囲:
+- 触れてはいけない範囲:
+
+## 3. 発見源 (discover)
+
+<!-- ループが次の仕事を見つける場所。上から順に探す。 -->
+
+1. `docs/backlog.md` の未着手項目(先頭から 1 件)
+2. `issue_labels` に一致する GitHub Issue(`/crystal:loop refill` で backlog に取り込む)
+
+## 4. 検証 (verifier)
+
+<!-- 何をどのレベルで検証するか。レベルの定義は rules/verification.md を参照。
+     タスクが許す限り低い(=決定的な)レベルに留めること。 -->
+
+| 対象 | レベル | 手段 |
+|---|---|---|
+| 変更ファイルの構文・規約 | L2 | lint-changed / stop-gate |
+| 振る舞い | L1–L3 | プロジェクトのテスト / evals の command 型 |
+| 完了条件の達成 | L4 | goal-gate (Haiku 判定) |
+| 下記ゲートに該当する操作 | L5 | 人間承認 |
+
+## 5. 停止条件 (stop rules)
+
+<!-- 4 層すべてを効かせる。単独の層に頼らない。 -->
+
+- **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
+- **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
+- **予算**: 上の `max_runs_per_day` / `max_minutes_per_run`
+- **無進捗**: 差分が変わらないラウンドが `max_no_progress` 回続いたら `status: stalled`
+
+## ゲート (人間承認が必要な操作)
+
+<!-- ここに挙げた操作は、ループが自動で実行してはならない。 -->
+
+- リモートへの push / PR の作成・マージ
+- 依存関係の追加・更新
+- マイグレーション、データ削除、本番環境に影響する操作
+- スコープ外のファイルへの変更

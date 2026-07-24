@@ -27,6 +27,7 @@ description: セッションを振り返り、再利用可能な知見を抽出�
 | 個人的・プロジェクト横断の好みや事実 | ビルトインのメモリディレクトリ（MEMORY.md 経由） |
 | 汎用的な技術手順で、トリガー条件が明確に書ける | `~/.claude/skills/<name>/SKILL.md` として新規スキル化を**提案**（作成前にユーザーへ内容を確認） |
 | 再発している問題・二度と壊したくない挙動 | `evals/cases/` に eval ケースとして追加を**提案**（`/crystal:eval add` と同形式） |
+| その場で片付かない作業（後日やるべき修正・積み残し） | `docs/backlog.md` に未着手項目として追記（外側ループが後で拾う） |
 
 ### 2.5. 再発問題の eval ケース化
 
@@ -34,10 +35,23 @@ description: セッションを振り返り、再利用可能な知見を抽出�
 
 - プロジェクトの `.claude/learnings.md` の既存エントリ
 - `~/.claude/logs/goal-gate.jsonl` の差し戻し履歴（同種の未達理由の繰り返し）
+- `.claude/loop/run-log.jsonl` の `failed` / `blocked` エントリ（同じ理由で止まっている）
 - 今回のセッション内（同じ失敗を複数回修正した等）
 
 提案時は id / type (command 優先、主観評価のみ rubric) / run（または rubric の観点）の案を
 示し、ユーザー承認後に `evals/cases/<id>.md` を作成する。形式は templates/eval-case.md に従う。
+
+### 2.6. 積み残しをキューに戻す
+
+その場で片付けない作業（eval ケースの追加そのもの、後回しにした修正、判明した技術的負債）は、
+`docs/backlog.md` があれば未着手項目として 1 行追記する。これがループの発見源になり、
+「気づいたが誰もやらない」で消えるのを防ぐ。書式:
+
+```markdown
+- [ ] Q-<次の番号>: <一行タイトル>  <!-- priority: med -->
+```
+
+`docs/backlog.md` が無いプロジェクトでは追記せず、`/crystal:loop init` を案内するに留める。
 
 ### 3. learnings.md への追記フォーマット
 
