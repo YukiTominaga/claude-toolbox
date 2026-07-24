@@ -58,10 +58,16 @@ Haiku で達成判定し、未達なら差し戻す。
 
 ## 更新
 
-リポジトリを編集したら、marketplace のキャッシュを更新する:
+リポジトリを編集したら、次の手順で反映する。**marketplace update だけでは
+インストール済みプラグイン(キャッシュコピー)は更新されない**ことに注意:
 
 ```bash
+# 1. plugin.json の version をバンプする(plugin update はバージョン番号で新旧を判定する)
+# 2. marketplace のメタデータを更新
 claude plugin marketplace update yuki-local
+# 3. インストール済みプラグイン本体を更新
+claude plugin update crystal@yuki-local
+# 4. 新しいセッションを開いて反映
 ```
 
 ## 構成
