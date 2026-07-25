@@ -12,7 +12,7 @@ expect_output: ^OK:
 
 1. **記帳をコミットしてはいけない**。`.claude/loop/` と `.claude/goal.md` はループの
    帳簿であってエージェントの作業ではない。コミットすると HEAD が毎ラウンド動き、
-   goal-gate の無進捗検知が「前進している」と誤認して停止条件 4 が丸ごと死ぬ。
+   goal-gate の無進捗検知が「前進している」と誤認して停止条件 3 が丸ごと死ぬ。
 2. **除外の書き方を間違えると何もコミットしなくなる**。`git add -A -- . ':(exclude)...'`
    は、対象が `.gitignore` 済みだと「The following paths are ignored」で **exit 1** になる。
    auto-commit は `|| exit 0` で受けているので、**無言で一切コミットしなくなる**。

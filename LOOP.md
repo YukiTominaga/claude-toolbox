@@ -1,7 +1,6 @@
 ---
 status: active
 max_runs_per_day: 8
-max_minutes_per_run: 30
 max_turns_per_run: 300
 issue_labels:
 ---
@@ -66,7 +65,7 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 | Stop hook の相互作用(実 Claude Code 経由) | L3 | `./scripts/loop-smoke.sh` — **手動**。Claude Code を更新したときと Stop hook の構成を変えたときに回す |
 | 下記ゲートに該当する操作 | L5 | 人間承認 |
 
-**stalled で終わったターンのコードは未検証である**。停止条件(ラウンド上限・予算・無進捗)に
+**stalled で終わったターンのコードは未検証である**。停止条件(ラウンド上限・無進捗)に
 触れたラウンドでは goal-gate が L1 検証より手前で抜けるため。stalled は人間を呼ぶ状態
 (L5 に上がる)なので、そこから先は人が確かめること。
 
@@ -78,19 +77,21 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
-- **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30` / `max_turns_per_run: 300`。
-  **金額では止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
-  計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めに
-  ならない。歯止めは回数・時間・ターン数が担う。実費は記録だけ続ける
-  (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress`(既定 2)回続いたら `status: stalled`
+- **予算**: 上の `max_runs_per_day: 8` / `max_turns_per_run: 300`。
+  **経過時間では止めない**(撤廃済み。`docs/spec/budget-removal.md`)。対話セッションでは人が
+  見ているため、時間で切ると邪魔になるだけで暴走は防げない。
+  **金額でも止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
+  計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めに
+  ならない。実費は記録だけ続ける
+  (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
 
 ## ゲート (人間承認が必要な操作)
 
 - Pull Request の作成・マージ
 - 依存関係の追加・更新、その他の破壊的な操作
-- この `LOOP.md` の frontmatter の変更。とりわけ `status` と予算の 3 項目
-  (`max_runs_per_day` / `max_minutes_per_run` / `max_turns_per_run`)。
+- この `LOOP.md` の frontmatter の変更。とりわけ `status` と予算の 2 項目
+  (`max_runs_per_day` / `max_turns_per_run`)。
   自分で緩められる歯止めは歯止めではない。`status: paused` を自分で `active` に
   戻せるなら停止は効かず、`max_runs_per_day` を自分で増やせるなら日次上限は上限でない。
   値を変えるべき根拠を見つけたら、**変えずに報告する**(`docs/backlog.md` に積むか

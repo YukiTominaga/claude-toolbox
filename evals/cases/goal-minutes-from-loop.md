@@ -1,25 +1,26 @@
 ---
 id: goal-minutes-from-loop
 type: command
-description: LOOP.md の max_minutes_per_run が goal.md の予算の既定値になる
+description: goal-gate は max_minutes / started_epoch を作らない
 run: evals/bin/hook-cases.sh goal-minutes-from-loop
 expect_exit: 0
 expect_output: ^OK:
 ---
 ## メモ
 
-**宣言した予算が機械的に効くことを固定するケース。**
+**時間予算の撤廃が導線から復活しないことを固定するケース**(`docs/spec/budget-removal.md`)。
 
-README は `max_minutes_per_run` を「goal-gate が停止条件として効かせる」と説明していたが、
-`hooks/goal-gate.sh` は LOOP.md を一度も読まず、既定値 60 をハードコードしていた
-(`grep -c "LOOP.md" hooks/goal-gate.sh` → 0)。LOOP.md に 30 と書いても内側ループは
-60 分回り、宣言した値が実際に入るのはモデルが `commands/goal.md` の指示に従って
-手で写したときだけ = **停止条件 4 層のうち「予算」層だけが人手依存**だった。
+このケースは元々逆の主張(「LOOP.md の `max_minutes_per_run` が `goal.md` の既定値になる」)を
+固定していた。撤廃に伴って反転させたが、**ケースが記録している失敗の型はそのまま生きている**:
 
-併せて `templates/goal.md` から `max_minutes: 60` の行を削除している。frontmatter に
-キーが存在すると `ensure_field` は上書きしないため、テンプレートに値が書かれている限り
-LOOP.md の宣言は永久に効かない。**実装だけ直しても導線側で無効化される**という形の
-穴だったので、両方を同じ変更に含めている。
+> `hooks/goal-gate.sh` を直しても、`templates/goal.md` に該当フィールドが残っていれば
+> `/crystal:goal` が作る goal.md 経由でモデルが書き戻し、撤廃が黙って無効化される。
+> 実装と導線は同じ変更に含めなければならない。
 
-LOOP.md が無いプロジェクトでは従来どおり 60 になることも同時に固定する
-(LOOP.md を前提にすると、ループを使わずに `/crystal:goal` だけ使う構成が壊れるため)。
+そのため実装側(goal-gate が 2 フィールドを書き込まないこと)だけでなく、
+`templates/goal.md` と `commands/goal.md` / `commands/loop.md` に記述が残っていないことも
+同じケースで確認する。**解説コメントも対象**にしている(行を消してもコメントが残れば
+モデルはそれを読んで書き戻せるため)。
+
+`LOOP.md` に `max_minutes_per_run: 15` を置いたまま検証する。旧 LOOP.md を持つプロジェクトで
+撤廃が効かなくなる経路を塞ぐため。

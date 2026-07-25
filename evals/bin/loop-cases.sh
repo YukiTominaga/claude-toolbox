@@ -131,7 +131,6 @@ guard-budget)
 ---
 status: active
 max_runs_per_day: 2
-max_minutes_per_run: 30
 ---
 EOF
   # loop-log.sh を一度も呼ばない = エージェントが台帳を書き忘れた状況を再現する
@@ -154,7 +153,6 @@ guard-check)
 ---
 status: active
 max_runs_per_day: 1
-max_minutes_per_run: 30
 ---
 EOF
   out=$(guard --check) || ng "--check が拒否した"
@@ -170,7 +168,6 @@ guard-cost-never-blocks)
 ---
 status: active
 max_runs_per_day: 99
-max_minutes_per_run: 30
 max_cost_usd_per_day: 5.0
 ---
 EOF
@@ -192,7 +189,6 @@ run-normal)
 ---
 status: active
 max_runs_per_day: 8
-max_minutes_per_run: 30
 max_turns_per_run: 123
 ---
 EOF
@@ -221,7 +217,6 @@ run-detects-unjudged)
 ---
 status: active
 max_runs_per_day: 8
-max_minutes_per_run: 30
 ---
 EOF
   stub_loop_cmd unjudged
@@ -242,7 +237,6 @@ run-records-abort)
 ---
 status: active
 max_runs_per_day: 8
-max_minutes_per_run: 30
 ---
 EOF
   write_queue <<'EOF'
