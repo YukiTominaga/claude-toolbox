@@ -77,7 +77,7 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
    - `docs/signals/` があれば `grep -l 'status: open' docs/signals/S-*.md` で未処理の発見を確認し、
      今回の項目に関係するものがあれば読む
 1. `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-guard.sh"` を実行する。
-   exit 1 なら理由をそのまま報告して**何もせずに終了する**(予算超過・paused)
+   exit 1 なら理由をそのまま報告して**何もせずに終了する**(`status: paused`)
 2. `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-next.sh"` を実行する。
    exit 3(キューが枯れた)の場合:
    - `docs/signals/` に `status: open` の signal があれば、そのタイトルを一覧で提示し、
@@ -142,7 +142,9 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
      **PR の作成・マージはしない** — `LOOP.md` の「ゲート」に該当するので、
      必要であることをユーザーに報告するに留める
 8. 最後に 1 行で報告する:
-   「Q-N: <title> → <結果>(ブランチ <branch>、残り <未着手件数> 件、本日 <n>/<max> 回)」
+   「Q-N: <title> → <結果>(ブランチ <branch>、残り <未着手件数> 件、本日 <n> 回目)」
+   実行回数は `loop-guard.sh` の `runs_today` を読む。**上限ではないので `/<max>` は付けない**
+   (回数による停止は撤廃済み。`docs/spec/budget-removal.md`)
 
 ## `refill` の場合
 
@@ -167,11 +169,13 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 
 ## `status` の場合
 
-**予算判定は `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-guard.sh" --check` を使う**
-(`--check` なしで呼ぶと、状態を見ただけで実行 1 回分の予算を消費する)。
+**状態の取得は `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-guard.sh" --check` を使う**
+(`--check` なしで呼ぶと、状態を見ただけで台帳に実行 1 回分の start 行が積まれ、
+本日の実行回数が実イテレーション数と食い違う)。
 
-- `LOOP.md` の status / 予算
+- `LOOP.md` の status
 - 台帳の直近 10 件(`loop-log.sh --recent 10`)と、本日の実行回数
+  (`runs_today`。**上限ではなく実績値**なので「n/max」の形で書かない)
 - `docs/backlog.md` の未着手 / 完了の件数
 - `docs/signals/` の `status: open` な件数(あれば)
 - `.claude/goal.md` があればその status / round

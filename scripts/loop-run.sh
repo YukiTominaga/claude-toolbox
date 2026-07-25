@@ -1,7 +1,7 @@
 #!/bin/bash
 # loop-run.sh — 無人で 1 イテレーションを回すエントリポイント。
 # 使い方: loop-run.sh          (cron / launchd から呼ぶ。登録そのものは人が行う = ゲート)
-#   exit 0 = 正常に 1 回まわした / exit 1 = 予算超過・paused・実行失敗
+#   exit 0 = 正常に 1 回まわした / exit 1 = paused・実行失敗
 #
 # なぜ `claude -p` を新しいプロセスで起動するのか:
 #   1. プラグインはキャッシュへの実コピーで、hooks はセッション開始時に固定される。
@@ -25,26 +25,24 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
-# --- 予算ゲート ---
+# --- 実行ゲート ---
 # **--check を使う(記録しない)**。この後に起動する /crystal:loop next の手順 1 が
-# 同じゲートを記録付きで呼ぶため、ここで記録すると 1 イテレーションで実行回数を
-# 2 回消費し、日次の上限が黙って半分になる(実測で踏んだ)。
+# 同じゲートを記録付きで呼ぶため、ここで記録すると 1 イテレーションで start 行を
+# 2 行積み、台帳の実行回数が実イテレーション数と食い違う(実測で踏んだ)。
 guard=$("$ROOT/scripts/loop-guard.sh" --check) || {
   echo "loop-run: $(printf '%s' "$guard" | jq -r '.reason // "実行できません"')" >&2
   exit 1
 }
 
 # --- 暴走の歯止め ---
-# ターン数で止める。**金額では止めない**: サブスクリプション(Max 等)では total_cost_usd は
-# トークン数から計算した参考値にすぎず、追加課金も発生しないので、金額を上限にしても
-# 意味のある歯止めにならない。ターン数なら課金形態に依存しない。
+# ターン数で止める。**この値は LOOP.md から読まない**: LOOP.md はループ自身が編集できる
+# ファイルなので、そこに書いた上限はループが自分で緩められる = 歯止めにならない。
+# ここを定数にしておくと、緩めるにはリポジトリの変更(= 人のレビュー)が要る。
+# **金額では止めない**: サブスクリプション(Max 等)では total_cost_usd はトークン数から
+# 計算した参考値にすぎず、追加課金も発生しないので意味のある歯止めにならない。
 # 正常なイテレーションでは発火しない値にすること(発火したら中断として扱われる)。
-turns=$(printf '%s' "$guard" | jq -r '.max_turns_per_run // empty')
-extra_args=""
-case "$turns" in
-'' | null) ;;
-*) extra_args="--max-turns $turns" ;;
-esac
+TURNS_PER_RUN=300
+extra_args="--max-turns $TURNS_PER_RUN"
 
 LEDGER=".claude/loop/run-log.jsonl"
 JUDGE_LOG=".claude/loop/judge-log.jsonl"

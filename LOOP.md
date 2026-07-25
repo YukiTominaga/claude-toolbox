@@ -1,7 +1,5 @@
 ---
 status: active
-max_runs_per_day: 8
-max_turns_per_run: 300
 issue_labels:
 ---
 # ループ契約
@@ -15,7 +13,7 @@ verifier 自身が判定できず、いつまでも昇格しないか、根拠�
 
 | 段階 | 昇格に必要な条件(すべて満たすこと) |
 |---|---|
-| 手動 → 対話 `/loop 30m /crystal:loop next` | `.claude/loop/judge-log.jsonl` に `met:false` の行が 1 件以上ある(判定器が実際に差し戻した実績)。かつ `loop-log.sh --recent 3` が 3 件とも `done`。かつ `./scripts/loop-smoke.sh` が OK |
+| 手動 → 対話 `/loop <間隔> /crystal:loop next` | `.claude/loop/judge-log.jsonl` に `met:false` の行が 1 件以上ある(判定器が実際に差し戻した実績)。かつ `loop-log.sh --recent 3` が 3 件とも `done`。かつ `./scripts/loop-smoke.sh` が OK |
 | 対話 → 無人 `./scripts/loop-run.sh` | 対話で 5 回連続 `done`、かつその間に人間が介入したイテレーションが 0 件 |
 
 無人実行の登録(cron / launchd)は**人が行う**。ループが自分でスケジュールを増やすことはしない。
@@ -78,35 +76,38 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress`(既定 2)回続いたら `status: stalled`
-- **予算**: 上の `max_runs_per_day: 8` / `max_turns_per_run: 300`。
-  **経過時間では止めない**(撤廃済み。`docs/spec/budget-removal.md`)。対話セッションでは人が
-  見ているため、時間で切ると邪魔になるだけで暴走は防げない。
-  **金額でも止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
-  計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めに
-  ならない。実費は記録だけ続ける
-  (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
+- **手動停止**: frontmatter の `status: paused`。`loop-guard.sh` が exit 1 で止める。
+  これは人が倒すスイッチであって予算ではない
+- **無人実行のターン数**: `scripts/loop-run.sh` がスクリプト内の定数として持つ上限。
+  `LOOP.md` から読まないので、ループが自分で緩められない
+
+**実行回数と経過時間では止めない**(撤廃済み。`docs/spec/budget-removal.md`)。対話セッションでは
+人が見ているため、回数や時間で切ると邪魔になるだけで暴走は防げない。
+**金額でも止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
+計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めにならない。
+実行回数と実費は**記録だけ続ける**(1 イテレーションの重さを測る相対指標として使う。
+実測で 1 回 $1.7〜$3.3 相当)。
 
 ## ゲート (人間承認が必要な操作)
 
 - Pull Request の作成・マージ
 - 依存関係の追加・更新、その他の破壊的な操作
-- この `LOOP.md` の frontmatter の変更。とりわけ `status` と予算の 2 項目
-  (`max_runs_per_day` / `max_turns_per_run`)。
-  自分で緩められる歯止めは歯止めではない。`status: paused` を自分で `active` に
-  戻せるなら停止は効かず、`max_runs_per_day` を自分で増やせるなら日次上限は上限でない。
-  値を変えるべき根拠を見つけたら、**変えずに報告する**(`docs/backlog.md` に積むか
-  signal を 1 件残す)。予算の 2 項目は「5. 停止条件」が本文にも転記しているので、
-  そちらの数値も同じく変更しない(本文は範囲内なので、書き換えれば強制値は変わらないまま
-  契約文だけが実効値と食い違う)
+- この `LOOP.md` の frontmatter の変更。とりわけ `status`。
+  自分で倒せる停止スイッチはスイッチではない。`status: paused` を自分で `active` に
+  戻せるなら停止は効かない。変えるべき根拠を見つけたら、**変えずに報告する**
+  (`docs/backlog.md` に積むか signal を 1 件残す)
+- `scripts/loop-run.sh` のターン数上限を緩めること。定数にしたのは、ループが自分で
+  上限を書き換えられない場所に置くためである(`LOOP.md` に書けば自分で緩められてしまう)。
+  値を変えるべき根拠を見つけたら、これも変えずに報告する
 
-人間が明示的に指示した frontmatter の変更は、その指示が承認そのものなので実行してよい
-(例: `/crystal:loop stop` による `status: paused`)。ゲートが禁じているのは
-**ループが自分の判断で書き換えること**である。
+人間が明示的に指示した変更は、その指示が承認そのものなので実行してよい
+(例: `/crystal:loop stop` による `status: paused`、人間が撤廃を指示した予算の削除)。
+ゲートが禁じているのは **ループが自分の判断で書き換えること**である。
 
-このうち **frontmatter の変更だけは機械的に強制されない**。`hooks/pre-bash-guard.sh` が
+このうち **ファイルの編集で済むものは機械的に強制されない**。`hooks/pre-bash-guard.sh` が
 無人実行で deny するのは Bash コマンドであり、Edit / Write によるファイル変更は見ていない。
-上の 2 つは該当コマンドが deny されるが、frontmatter は書けてしまう。ここは規律で守る箇所で、
-破れば git 履歴に残る。
+最初の 2 つは該当コマンドが deny されるが、frontmatter と `loop-run.sh` の定数は書けてしまう。
+ここは規律で守る箇所で、破れば git 履歴に残る。
 
 `git push` は**ゲートにしない**。feature branch への追記に限りループが自分で行ってよい
 (force push と履歴操作は「2. 作業範囲」で禁止済み)。理由:
