@@ -183,10 +183,15 @@ elif ! l1_failed=$("$CHECKS" 2>&1); then
 fi
 
 # --- 判定材料の収集 ---
-command -v claude >/dev/null 2>&1 || {
-  warn "claude CLI が見つからないため判定をスキップ"
-  exit 0
-}
+# CRYSTAL_JUDGE_CMD が指定されていれば判定器を差し替える(eval が met/unmet の両経路を
+# 決定的に踏むために使う)。差し替え先は `claude -p --output-format json` と同じ形の
+# JSON を stdout に返すこと。指定が無ければ claude CLI の有無を見る。
+if [ -z "${CRYSTAL_JUDGE_CMD:-}" ]; then
+  command -v claude >/dev/null 2>&1 || {
+    warn "claude CLI が見つからないため判定をスキップ"
+    exit 0
+  }
+fi
 
 transcript_path=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
@@ -234,30 +239,52 @@ else
   TIMEOUT=""
 fi
 
-# --- Haiku による判定 (再帰防止は disableAllHooks + env ガードの二重化) ---
-result=$(printf '%s' "$prompt" | CRYSTAL_GOAL_JUDGE=1 $TIMEOUT \
-  claude -p --model claude-haiku-4-5-20251001 \
-  --settings '{"disableAllHooks": true}' 2>>"$LOG") || {
+# 判定結果のスキーマ。--json-schema に渡して形を CLI 側に強制させる。
+# これにより「JSON 以外が混ざったら正規表現で拾い直す」たぐいの後処理が不要になる。
+SCHEMA='{"type":"object","properties":{"met":{"type":"boolean"},"unmet":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["met","unmet","reason"],"additionalProperties":false}'
+
+# --max-budget-usd は判定器自身の暴走止め。実測で 1 回 $0.014〜$0.062 なので十分な余裕がある。
+JUDGE="${CRYSTAL_JUDGE_CMD:-}"
+if [ -z "$JUDGE" ]; then
+  JUDGE="claude -p --model claude-haiku-4-5-20251001 --settings {\"disableAllHooks\":true} --output-format json --max-budget-usd 0.5 --json-schema $SCHEMA"
+fi
+
+# --- 判定 (再帰防止は disableAllHooks + env ガードの二重化) ---
+# JUDGE は意図的にクォートせず単語分割させる(コマンドと引数列を 1 変数で持つため)。
+# 中身は上のリテラルか、eval が渡すスタブのパスのみで、外部入力は入らない。
+# shellcheck disable=SC2086
+raw=$(printf '%s' "$prompt" | CRYSTAL_GOAL_JUDGE=1 $TIMEOUT $JUDGE 2>>"$LOG") || {
   warn "judge 実行失敗 (round=$round)"
   exit 0
 }
 
-json=$result
-if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
-  json=$(printf '%s' "$result" | sed -n '/{/,/}/p')
+# `claude -p --output-format json` は {..., "result": "<JSON文字列>", "total_cost_usd": N} を返す。
+# .result の中身が判定結果。スタブや将来の形式変更に備え、外側が剥がせなければ
+# raw をそのまま判定結果とみなす。
+cost=$(printf '%s' "$raw" | jq -r '.total_cost_usd // 0' 2>/dev/null)
+case "$cost" in '' | null) cost=0 ;; esac
+
+if printf '%s' "$raw" | jq -e '.is_error == true' >/dev/null 2>&1; then
+  warn "judge がエラーを返した (round=$round, subtype=$(printf '%s' "$raw" | jq -r '.subtype // ""'), cost=$cost)"
+  exit 0
 fi
+
+json=$(printf '%s' "$raw" | jq -r '.result // empty' 2>/dev/null)
+[ -n "$json" ] || json=$raw
+
 met=$(printf '%s' "$json" | jq -r '.met' 2>/dev/null)
 if [ "$met" != "true" ] && [ "$met" != "false" ]; then
-  warn "judge 出力のパースに失敗 (round=$round)"
+  warn "judge 出力のパースに失敗 (round=$round, cost=$cost)"
   exit 0
 fi
 
 unmet=$(printf '%s' "$json" | jq -r '(.unmet // []) | join(", ")' 2>/dev/null)
 reason=$(printf '%s' "$json" | jq -r '.reason // ""' 2>/dev/null)
 
-# --- 判定履歴を記録 (/learn の素材) ---
+# --- 判定履歴を記録 (/learn の素材、コストの実測値) ---
 printf '%s' "$json" | jq -c --arg ts "$(date -Iseconds)" --arg sid "$session_id" --argjson r "$round" \
-  '{ts:$ts, session_id:$sid, round:$r, met:.met, unmet:(.unmet // []), reason:(.reason // "")}' \
+  --argjson c "$cost" \
+  '{ts:$ts, session_id:$sid, round:$r, met:.met, unmet:(.unmet // []), reason:(.reason // ""), cost_usd:$c}' \
   >>"$LOG" 2>/dev/null
 
 if [ "$met" = "true" ]; then

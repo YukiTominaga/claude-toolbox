@@ -64,6 +64,24 @@ EOF
 
 set_npm() { printf '%s' "$1" >"$WORK/npm-exit"; }
 
+# goal-gate の判定器スタブ。CRYSTAL_JUDGE_CMD で差し替えて met/unmet の両経路を踏む。
+# $1 = true | false | broken (壊れた出力) | error (is_error を返す)
+stub_judge() {
+  mkdir -p "$WORK/bin"
+  case "$1" in
+  broken) payload='これは JSON ではありません' ;;
+  error) payload='{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":0.5}' ;;
+  *) payload=$(printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123,"result":"{\\"met\\":%s,\\"unmet\\":[\\"DC-1\\"],\\"reason\\":\\"スタブ判定\\"}"}' "$1") ;;
+  esac
+  cat >"$WORK/bin/judge" <<EOF
+#!/bin/bash
+cat >/dev/null
+echo "judge \$*" >>"$WORK/calls.log"
+printf '%s' '$payload'
+EOF
+  chmod +x "$WORK/bin/judge"
+}
+
 # auto-commit のメッセージ生成が judge を呼んだかどうかを見分けるためのスタブ
 stub_claude() {
   mkdir -p "$WORK/bin"
@@ -325,6 +343,66 @@ goal-l1-round-consumed)
   done
   [ "$(goal_field status)" = "stalled" ] || ng "赤いまま回り続けて止まらない (round=$(goal_field round))"
   ok "赤い L1 でもラウンドを消費し、上限で止まる"
+  ;;
+
+# ---------------------------------------------------------------------------
+# goal-gate.sh の判定器 (L4)
+# ---------------------------------------------------------------------------
+
+# 達成と判定されたら status: done になり、コストが履歴に残る
+goal-judge-met)
+  init_git
+  write_goal 2 "$(date +%s)" 60
+  stub_npm
+  stub_judge true
+  export CRYSTAL_JUDGE_CMD="$WORK/bin/judge"
+  goalgate >/dev/null 2>&1 || ng "達成時の exit が 0 でない"
+  [ "$(goal_field status)" = "done" ] || ng "status が done になっていない"
+  [ "$(calls_count '^judge')" -eq 1 ] || ng "判定器が呼ばれていない"
+  log="$WORK/.claude/loop/judge-log.jsonl"
+  [ -s "$log" ] || ng "判定履歴が書かれていない"
+  [ "$(tail -n1 "$log" | jq -r .met)" = "true" ] || ng "履歴の met が true でない"
+  [ "$(tail -n1 "$log" | jq -r .cost_usd)" = "0.0123" ] || ng "コストが記録されていない"
+  ok "達成判定で done になり、コストも記録される"
+  ;;
+
+# 未達なら差し戻し、未達条件が伝わる
+goal-judge-unmet)
+  init_git
+  write_goal 2 "$(date +%s)" 60
+  stub_npm
+  stub_judge false
+  export CRYSTAL_JUDGE_CMD="$WORK/bin/judge"
+  out=$(goalgate 2>&1) && ng "未達なのに差し戻していない"
+  [ "$(goal_field status)" = "active" ] || ng "未達で status が変わってしまった"
+  printf '%s' "$out" | grep -q 'DC-1' || ng "未達条件が伝わっていない"
+  printf '%s' "$out" | grep -q 'スタブ判定' || ng "理由が伝わっていない"
+  [ "$(tail -n1 "$WORK/.claude/loop/judge-log.jsonl" | jq -r .met)" = "false" ] || ng "履歴の met が false でない"
+  ok "未達なら未達条件と理由を添えて差し戻す"
+  ;;
+
+# 判定器が壊れた出力やエラーを返したら fail-open (ループを止めない)
+goal-judge-broken)
+  init_git
+  write_goal 2 "$(date +%s)" 60
+  stub_npm
+
+  # ラウンド間で作業ツリーを変える。変えないと無進捗層が判定器より手前で差し戻し、
+  # 判定器の経路を踏めない。
+  # **毎回別のファイルを作ること**: 未追跡ファイルへの追記は git status --porcelain の
+  # 出力を変えないので署名も変わらず、「進んでいない」と見なされる
+  stub_judge broken
+  export CRYSTAL_JUDGE_CMD="$WORK/bin/judge"
+  echo w >"$WORK/w1.txt"
+  goalgate >/dev/null 2>&1 || ng "壊れた出力で fail-open していない"
+  [ "$(goal_field status)" = "active" ] || ng "壊れた出力で status を変えた"
+
+  stub_judge error
+  echo w >"$WORK/w2.txt"
+  goalgate >/dev/null 2>&1 || ng "エラー応答で fail-open していない"
+  [ "$(goal_field status)" = "active" ] || ng "エラー応答で status を変えた"
+  grep -q 'judge がエラーを返した' "$WORK/.claude/loop/judge-log.jsonl" || ng "エラーが記録されていない"
+  ok "判定器が壊れてもループを止めず、痕跡を残す"
   ;;
 
 # ---------------------------------------------------------------------------
