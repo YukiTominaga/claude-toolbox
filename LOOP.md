@@ -10,13 +10,15 @@ issue_labels:
 
 **手動のみ**。必要なときに `/crystal:loop next` を手で叩く。周期実行は入れない。
 
-closed から始め、verifier が「自分が見つけたはずの失敗」を実際に検知した実績が
+bounded から始め、verifier が「自分が見つけたはずの失敗」を実際に検知した実績が
 できてから、対話セッション中の `/loop 30m /crystal:loop next` に上げる。
-無人の Routines はそのさらに後。
+無人実行はそのさらに後。
 
-## 2. スコープ (open / closed)
+## 2. 作業範囲 (bounded / unbounded)
 
-**closed**。
+**bounded**。この節は**触ってよいファイルの範囲**を決める。
+1 イテレーションで**どこまで探索してよいか**(収束型 / 探索型)は別の軸で、
+`.claude/goal.md` の完了条件の書き方で表現する(`/crystal:goal` を参照)。
 
 - 触れてよい範囲:
   - `skills/` `agents/` `commands/` `rules/` `templates/` `scripts/` `hooks/` `evals/`
@@ -74,7 +76,7 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 - 依存関係の追加・更新、その他の破壊的な操作
 
 `git push` は**ゲートにしない**。feature branch への追記に限りループが自分で行ってよい
-(force push と履歴操作は「2. スコープ」で禁止済み)。理由:
+(force push と履歴操作は「2. 作業範囲」で禁止済み)。理由:
 
 - 不可逆なのは merge であって push ではない。ゲートは不可逆な側に置く
 - 無人ループは承認を待てないので、**ゲートに置いた操作は実質「実行しない」と同義**になる。

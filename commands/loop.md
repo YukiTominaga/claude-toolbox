@@ -86,7 +86,7 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
    - open な signal も無ければ「キューが枯れた」と報告して終了する
 
    以降、取得した JSON の `id` / `title` / `spec` を使う
-3. `LOOP.md` の「2. スコープ」と「ゲート」を読む。この項目がスコープ外なら、
+3. `LOOP.md` の「2. 作業範囲」と「ゲート」を読む。この項目が範囲外なら、
    `loop-log.sh <id> blocked "スコープ外"` を記録して終了する
 3.5. **作業ブランチを確保する**。現在のブランチが `main` / `master` / detached HEAD なら、
    `git switch -c loop/<id>`(例: `loop/Q-8`)で feature ブランチを作って切り替える。
