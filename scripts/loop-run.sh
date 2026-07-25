@@ -25,8 +25,11 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
-# --- 予算ゲート。通過した時点でゲート自身が start を記録する ---
-guard=$("$ROOT/scripts/loop-guard.sh") || {
+# --- 予算ゲート ---
+# **--check を使う(記録しない)**。この後に起動する /crystal:loop next の手順 1 が
+# 同じゲートを記録付きで呼ぶため、ここで記録すると 1 イテレーションで実行回数を
+# 2 回消費し、日次の上限が黙って半分になる(実測で踏んだ)。
+guard=$("$ROOT/scripts/loop-guard.sh" --check) || {
   echo "loop-run: $(printf '%s' "$guard" | jq -r '.reason // "実行できません"')" >&2
   exit 1
 }

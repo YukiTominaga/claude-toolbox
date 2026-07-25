@@ -102,11 +102,19 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
      同じ手順で `docs/spec/<id>.md` を作成し、`crystal:spec-critic` にかけて指摘を反映する
    - 疑問が残る場合は勝手に決めず、ユーザーに確認して終了してよい
      (`loop-log.sh <id> blocked "要確認: ..."` を残す)
-5. `/crystal:goal` と同じ手順で `.claude/goal.md` を作成する。仕様の AC-* を DC-* に取り込み、
-   `max_minutes` は `LOOP.md` の `max_minutes_per_run` を既定値にする。
+5. **実装に着手する前に** `/crystal:goal` と同じ手順で `.claude/goal.md` を作成する。
+   仕様の AC-* を DC-* に取り込み、`max_minutes` は `LOOP.md` の `max_minutes_per_run` を
+   既定値にする。**必ず `status: active` で作り、自分で `done` に書き換えないこと**
+   (`done` にするのは goal-gate の仕事)。
    **ここから先の反復は goal-gate が駆動する**ので、このコマンドは実装を進めるだけでよい
 6. ゴールが `status: done` になったら `crystal:verifier` を起動して独立検証する。
-   verifier が「満たさない」を返した場合は修正して再検証する(自己採点で済ませない)
+   verifier が「満たさない」を返した場合は修正して再検証する(自己採点で済ませない)。
+
+   **その前に `.claude/goal.md` の `round` を確認する**。`round: 0` のまま `done` に
+   なっているなら、**内側ループが一度も動いていない**(goal-gate が判定していない)。
+   実装後に goal.md を作った、または自分で `done` に書き換えた場合にこうなる。
+   このときは自己採点しかされていないので、そのまま完了扱いにせず、
+   `.claude/loop/judge-log.jsonl` の有無を添えてユーザーに報告すること
 7. 記録して次へ:
    - `docs/backlog.md` の該当行を `- [ ]` から `- [x]` に変える
      (`status: stalled` で終わった場合は変えない)
