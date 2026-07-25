@@ -68,13 +68,24 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 
 ## `next` の場合(1 イテレーション)
 
-**手順を飛ばさないこと。特に 1 と 6 は省略しない。**
+**手順を飛ばさないこと。特に 0 と 1 と 6 は省略しない。**
 
+0. **前回までの文脈を読む**(これを飛ばすと同じ壁に二度当たる):
+   - `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-log.sh" --recent 5` で直近の結果を読む。
+     取り出す項目が以前 `blocked` / `failed` になっていたら、そのメモを踏まえてから着手する
+   - `docs/signals/` があれば `grep -l 'status: open' docs/signals/S-*.md` で未処理の発見を確認し、
+     今回の項目に関係するものがあれば読む
 1. `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-guard.sh"` を実行する。
    exit 1 なら理由をそのまま報告して**何もせずに終了する**(予算超過・paused)
 2. `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-next.sh"` を実行する。
-   exit 3 なら「キューが枯れた」と報告して終了する。以降、取得した JSON の
-   `id` / `title` / `spec` を使う
+   exit 3(キューが枯れた)の場合:
+   - `docs/signals/` に `status: open` の signal があれば、そのタイトルを一覧で提示し、
+     **backlog に昇格するかユーザーに確認する**(昇格したらその signal を `status: converted` にする)
+   - **無人実行中(`CRYSTAL_UNATTENDED=1`)は昇格させず、枯渇したことだけ報告して終了する**。
+     仕事を自分で作らない
+   - open な signal も無ければ「キューが枯れた」と報告して終了する
+
+   以降、取得した JSON の `id` / `title` / `spec` を使う
 3. `LOOP.md` の「2. スコープ」と「ゲート」を読む。この項目がスコープ外なら、
    `loop-log.sh <id> blocked "スコープ外"` を記録して終了する
 3.5. **作業ブランチを確保する**。現在のブランチが `main` / `master` / detached HEAD なら、
@@ -100,6 +111,12 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
    - `docs/backlog.md` の該当行を `- [ ]` から `- [x]` に変える
      (`status: stalled` で終わった場合は変えない)
    - `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-log.sh" <id> <done|failed|blocked> <ラウンド数> "<一行メモ>"`
+     メモには**次のイテレーションが読んで役に立つこと**を書く(手順 0 で読まれる)。
+     「何に詰まったか」「次に何を試すか」を含める。「完了」だけのメモは書かない
+   - `blocked` / `failed` で終わった場合、または goal が `status: stalled` で終わった場合は、
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/signal-add.sh" "<一行>" "<id>" "<本文>"` で発見を 1 件残す
+     (`docs/signals/` がある場合のみ)。verifier が「満たさない」と返し、その原因が
+     この項目の外にあるときも同様
    - **feature ブランチへの push はしてよい**(未 push のコミットは環境が消えると失われ、
      かつ feature ブランチへの push は可逆であるため)。
      **PR の作成・マージはしない** — `LOOP.md` の「ゲート」に該当するので、
@@ -130,8 +147,9 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 (`--check` なしで呼ぶと、状態を見ただけで実行 1 回分の予算を消費する)。
 
 - `LOOP.md` の status / 予算
-- `.claude/loop/run-log.jsonl` の直近 10 件と、本日の実行回数
+- 台帳の直近 10 件(`loop-log.sh --recent 10`)と、本日の実行回数
 - `docs/backlog.md` の未着手 / 完了の件数
+- `docs/signals/` の `status: open` な件数(あれば)
 - `.claude/goal.md` があればその status / round
 
 を表形式で報告する。ファイルが無いものは「未設定」と書く。

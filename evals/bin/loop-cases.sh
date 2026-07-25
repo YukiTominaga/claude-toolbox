@@ -150,6 +150,28 @@ EOF
   ok "paused では実行しない"
   ;;
 
+# 台帳: --recent が結果行だけを新しい順に返す(次のイテレーションが読む口)
+log-recent)
+  [ -z "$(loglog --recent 5)" ] || ng "台帳が無いのに何か出力した"
+
+  guard >/dev/null 2>&1 # start 行を 1 行作る (LOOP.md が無いので fail-open だが台帳は作らない)
+  loglog Q-1 done 1 "1件目" >/dev/null
+  loglog Q-2 blocked 2 "2件目" >/dev/null
+  loglog Q-3 failed 3 "3件目" >/dev/null
+
+  out=$(loglog --recent 2)
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" -eq 2 ] || ng "件数が 2 でない"
+  [ "$(printf '%s\n' "$out" | head -n1 | jq -r .item_id)" = "Q-3" ] || ng "新しい順になっていない"
+  [ "$(printf '%s\n' "$out" | tail -n1 | jq -r .item_id)" = "Q-2" ] || ng "2 件目が Q-2 でない"
+
+  # start 行 (予算の集計用) は混ざらない
+  printf '{"ts":"2026-01-01T00:00:00+09:00","event":"start"}\n' >>"$WORK/.claude/loop/run-log.jsonl"
+  loglog --recent 10 | grep -q '"event":"start"' && ng "start 行が混ざっている"
+
+  [ "$(loglog --recent | wc -l | tr -d ' ')" -eq 3 ] || ng "既定件数が 5 になっていない"
+  ok "--recent が結果行だけを新しい順に返す"
+  ;;
+
 # signals: 採番が連番になり、frontmatter が揃う
 signal-add-numbering)
   signal "最初の気づき" >/dev/null 2>&1
