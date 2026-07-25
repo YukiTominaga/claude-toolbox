@@ -33,7 +33,7 @@ run() { CLAUDE_PROJECT_DIR="$WORK" CRYSTAL_LOOP_CMD="$WORK/bin/loopcmd" "$ROOT/s
 # 無人ループの中身 (claude -p) を差し替えるスタブ。
 # $1 = judged    判定器を通して正常終了する
 #      unjudged  done と記録するが判定器を通さない (自己採点だけ)
-#      aborted   予算上限などで打ち切られる (記帳まで到達しない)
+#      aborted   ターン上限などで打ち切られる (記帳まで到達しない)
 stub_loop_cmd() {
   mkdir -p "$WORK/bin" "$WORK/.claude/loop"
   cat >"$WORK/bin/loopcmd" <<EOF
@@ -43,7 +43,7 @@ echo "\$*" >"$WORK/loopcmd-args"
 # エージェントが 1 イテレーションを終えた状態を作る
 CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" >/dev/null 2>&1
 if [ "$1" = "aborted" ]; then
-  printf '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":3.31}'
+  printf '{"type":"result","subtype":"error_max_turns","is_error":true,"total_cost_usd":3.31}'
   exit 0
 fi
 CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" Q-1 done 1 "スタブ" >/dev/null 2>&1
@@ -164,8 +164,8 @@ EOF
   ok "--check は記録せず判定だけ返す"
   ;;
 
-# 予算ゲート: 実費の上限。無人実行が積んだ cost 行を合計して判定する
-guard-cost)
+# 予算ゲート: 金額では止めない。cost 行がいくら積まれていても実行を拒まない
+guard-cost-never-blocks)
   write_loop <<'EOF'
 ---
 status: active
@@ -174,40 +174,16 @@ max_minutes_per_run: 30
 max_cost_usd_per_day: 5.0
 ---
 EOF
-  out=$(guard --check) || ng "上限未達なのに拒否した"
-  printf '%s' "$out" | jq -e '.cost_today_usd == 0' >/dev/null || ng "cost_today_usd が 0 でない"
-  printf '%s' "$out" | jq -e '.cost_remaining_usd == 5' >/dev/null || ng "残り予算が返っていない"
-  printf '%s' "$out" | jq -e '.max_turns_per_run == 300' >/dev/null || ng "ターン上限の既定が 300 でない"
-
+  # 上限を書いても機構自体が無いので効かない。旧 LOOP.md が残っていても素通しすること
   mkdir -p "$WORK/.claude/loop"
   ts=$(date -Iseconds)
-  printf '{"ts":"%s","event":"cost","cost_usd":3.2}\n{"ts":"%s","event":"cost","cost_usd":1.0}\n' \
-    "$ts" "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
-  out=$(guard --check) || ng "4.2/5.0 で拒否した"
-  printf '%s' "$out" | jq -e '.cost_today_usd == 4.2' >/dev/null || ng "合計が 4.2 でない"
-  printf '%s' "$out" | jq -e '(.cost_remaining_usd - 0.8) | fabs < 0.001' >/dev/null ||
-    ng "残りが 0.8 でない"
+  printf '{"ts":"%s","event":"cost","cost_usd":999}\n' "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
 
-  printf '{"ts":"%s","event":"cost","cost_usd":1.0}\n' "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
-  guard --check >/dev/null 2>&1 && ng "上限を超えても実行が許可された"
-
-  # 昨日のコストは今日の予算を食わない
-  printf '{"ts":"2020-01-01T00:00:00+09:00","event":"cost","cost_usd":99}\n' \
-    >>"$WORK/.claude/loop/run-log.jsonl"
-  out=$(guard --check 2>/dev/null)
-  printf '%s' "$out" | jq -e '.cost_today_usd == 5.2' >/dev/null || ng "他の日のコストを合計した"
-
-  # 上限が未設定なら実費では判定しない(対話セッションの構成)
-  write_loop <<'EOF'
----
-status: active
-max_runs_per_day: 99
-max_minutes_per_run: 30
----
-EOF
-  out=$(guard --check) || ng "上限未設定なのに拒否した"
-  printf '%s' "$out" | jq -e 'has("cost_remaining_usd")' >/dev/null && ng "未設定なのに残り予算を返した"
-  ok "実費の上限を台帳の合計で判定する"
+  out=$(guard --check) || ng "実費が積まれているだけで拒否した (金額で止めてはいけない)"
+  printf '%s' "$out" | jq -e '.max_turns_per_run == 300' >/dev/null || ng "ターン上限の既定が 300 でない"
+  printf '%s' "$out" | jq -e 'has("cost_today_usd")' >/dev/null && ng "実費を判定材料として返している"
+  printf '%s' "$out" | jq -e 'has("cost_remaining_usd")' >/dev/null && ng "残り予算を返している"
+  ok "金額では止めず、実費を判定材料にも使わない"
   ;;
 
 # 無人実行: 判定器を通った 1 イテレーション。実費を記録し、予算は 1 回だけ消費する
@@ -228,7 +204,7 @@ EOF
   args=$(cat "$WORK/loopcmd-args")
   printf '%s' "$args" | grep -q -- '--max-turns 123' || ng "ターン上限が渡っていない: $args"
   printf '%s' "$args" | grep -q -- '--max-budget-usd' &&
-    ng "実費の上限が未設定なのに金額で止めようとしている: $args"
+    ng "金額で止めようとしている (歯止めはターン数が担う): $args"
 
   ledger="$WORK/.claude/loop/run-log.jsonl"
   [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] ||
@@ -275,7 +251,7 @@ EOF
 EOF
   stub_loop_cmd aborted
   out=$(run 2>&1) && ng "打ち切られたのに成功として扱った"
-  printf '%s' "$out" | grep -q 'error_max_budget_usd' || ng "理由が報告されていない: $out"
+  printf '%s' "$out" | grep -q 'error_max_turns' || ng "理由が報告されていない: $out"
 
   # エージェントは手順 7 まで到達できないので、loop-run.sh が代わりに記録する
   last=$(loglog --recent 1)
@@ -284,7 +260,7 @@ EOF
   [ "$(printf '%s' "$last" | jq -r .item_id)" = "Q-1" ] || ng "キュー先頭の id が記録されていない"
   printf '%s' "$last" | jq -r .notes | grep -q '中断' || ng "中断であることがメモに無い"
 
-  # 実費は打ち切られた分も記録する (しないと失敗を繰り返すループが無限に課金できる)
+  # 実費は打ち切られた分も記録する (何が、どれだけ重かったかを後から読み返せるように)
   grep '"event":"cost"' "$WORK/.claude/loop/run-log.jsonl" | jq -e '.cost_usd == 3.31' >/dev/null ||
     ng "打ち切られた実行のコストが記録されていない"
   ok "打ち切られたイテレーションを台帳に残す"

@@ -73,11 +73,25 @@ ensure_field() {
 status=$(get_field status)
 [ "$status" = "active" ] || exit 0
 
+# 予算の既定値は LOOP.md の max_minutes_per_run に従う。README がこれを
+# 「goal-gate が停止条件として効かせる」と説明している以上、宣言した値が機械的に
+# 効かないと、歯止めが「モデルが手で写したかどうか」に依存してしまう。
+# 読むのは status: active を抜けた後にする(オプトイン時のコストゼロを保つため)。
+default_minutes=60
+if [ -f "LOOP.md" ]; then
+  v=$(awk '
+    /^---$/ { fm++; next }
+    fm==1 && /^max_minutes_per_run:/ {
+      sub("^max_minutes_per_run: *", ""); sub(" *#.*$", ""); gsub(/^ +| +$/, ""); print; exit
+    }' LOOP.md)
+  case "$v" in '' | *[!0-9]*) ;; *) default_minutes=$v ;; esac
+fi
+
 ensure_field no_progress 0
 ensure_field max_no_progress 2
 ensure_field last_sig ""
 ensure_field started_epoch ""
-ensure_field max_minutes 60
+ensure_field max_minutes "$default_minutes"
 
 round=$(get_field round)
 max_rounds=$(get_field max_rounds)
@@ -100,7 +114,7 @@ fi
 now_epoch=$(date +%s 2>/dev/null)
 started_epoch=$(get_field started_epoch)
 max_minutes=$(get_field max_minutes)
-case "$max_minutes" in '' | *[!0-9]*) max_minutes=60 ;; esac
+case "$max_minutes" in '' | *[!0-9]*) max_minutes=$default_minutes ;; esac
 case "$started_epoch" in
 '' | *[!0-9]*)
   [ -n "$now_epoch" ] && update_field started_epoch "$now_epoch"
@@ -270,10 +284,11 @@ fi
 # これにより「JSON 以外が混ざったら正規表現で拾い直す」たぐいの後処理が不要になる。
 SCHEMA='{"type":"object","properties":{"met":{"type":"boolean"},"unmet":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["met","unmet","reason"],"additionalProperties":false}'
 
-# --max-budget-usd は判定器自身の暴走止め。実測で 1 回 $0.014〜$0.062 なので十分な余裕がある。
+# 判定器の暴走は上の TIMEOUT と hooks.json の timeout が止める。**金額では止めない**
+# (サブスクリプションでは total_cost_usd が参考値にすぎず、歯止めとして意味を持たないため)。
 JUDGE="${CRYSTAL_JUDGE_CMD:-}"
 if [ -z "$JUDGE" ]; then
-  JUDGE="claude -p --model claude-haiku-4-5-20251001 --settings {\"disableAllHooks\":true} --output-format json --max-budget-usd 0.5 --json-schema $SCHEMA"
+  JUDGE="claude -p --model claude-haiku-4-5-20251001 --settings {\"disableAllHooks\":true} --output-format json --json-schema $SCHEMA"
 fi
 
 # --- 判定 (再帰防止は disableAllHooks + env ガードの二重化) ---

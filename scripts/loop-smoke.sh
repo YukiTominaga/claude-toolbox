@@ -2,7 +2,7 @@
 # loop-smoke.sh — 実際の Claude Code を通して Stop hook の相互作用を確かめる契約テスト。
 # 使い方: ./scripts/loop-smoke.sh
 #
-# **evals には入れない**。課金・認証・ネットワークが必要で出力が非決定的であり、
+# **evals には入れない**。認証・ネットワークが必要で出力が非決定的であり、
 # かつ検証対象がこのリポジトリではなく**インストール済みのキャッシュコピー**だから
 # (先に version バンプ → claude plugin update を済ませること)。
 #
@@ -13,7 +13,7 @@
 #   2. stop_hook_active は一度差し戻されると true に固定される
 #
 # 回すタイミング: Claude Code を更新したとき / Stop hook の構成を変えたとき。
-# 数セントかかる。モデルの出力ではなく副作用だけを検証する。
+# モデルの出力ではなく副作用だけを検証する。
 set -u
 
 command -v claude >/dev/null 2>&1 || {
@@ -77,7 +77,7 @@ goal_field() {
     "$WORK/.claude/goal.md"
 }
 
-echo "実行中 (数セントかかります)..."
+echo "実行中..."
 (cd "$WORK" && claude -p "smoke-a.txt を作ってください。内容は a の 1 行で十分です。" \
   --max-turns 12 --permission-mode acceptEdits --allowedTools "Write,Read,Edit" \
   --output-format json --no-session-persistence >"$WORK/out.json" 2>"$WORK/err.log")

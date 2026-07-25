@@ -3,7 +3,6 @@ status: active
 max_runs_per_day: 8
 max_minutes_per_run: 30
 max_turns_per_run: 300
-max_cost_usd_per_day:
 issue_labels:
 ---
 # ループ契約
@@ -18,7 +17,7 @@ verifier 自身が判定できず、いつまでも昇格しないか、根拠�
 | 段階 | 昇格に必要な条件(すべて満たすこと) |
 |---|---|
 | 手動 → 対話 `/loop 30m /crystal:loop next` | `.claude/loop/judge-log.jsonl` に `met:false` の行が 1 件以上ある(判定器が実際に差し戻した実績)。かつ `loop-log.sh --recent 3` が 3 件とも `done`。かつ `./scripts/loop-smoke.sh` が OK |
-| 対話 → 無人 `./scripts/loop-run.sh` | 対話で 5 回連続 `done`、かつその間に人間が介入したイテレーションが 0 件。かつ `max_cost_usd_per_day` を設定済み |
+| 対話 → 無人 `./scripts/loop-run.sh` | 対話で 5 回連続 `done`、かつその間に人間が介入したイテレーションが 0 件 |
 
 無人実行の登録(cron / launchd)は**人が行う**。ループが自分でスケジュールを増やすことはしない。
 
@@ -76,10 +75,9 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
 - **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30` / `max_turns_per_run: 300`。
-  `max_cost_usd_per_day` は**空のまま**にする。このアカウントはサブスクリプションで、
-  `total_cost_usd` はトークン数から計算した参考値にすぎず追加課金も発生しないため、
-  金額を上限にしても意味のある歯止めにならない(API キー運用に持っていくときだけ設定する)。
-  暴走の歯止めはターン数が担う。実費は記録だけ続ける
+  **金額では止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
+  計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めに
+  ならない。歯止めは回数・時間・ターン数が担う。実費は記録だけ続ける
   (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress`(既定 2)回続いたら `status: stalled`
 

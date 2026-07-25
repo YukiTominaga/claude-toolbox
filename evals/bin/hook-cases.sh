@@ -70,7 +70,7 @@ stub_judge() {
   mkdir -p "$WORK/bin"
   case "$1" in
   broken) payload='これは JSON ではありません' ;;
-  error) payload='{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":0.5}' ;;
+  error) payload='{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.5}' ;;
   *) payload=$(printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123,"result":"{\\"met\\":%s,\\"unmet\\":[\\"DC-1\\"],\\"reason\\":\\"スタブ判定\\"}"}' "$1") ;;
   esac
   cat >"$WORK/bin/judge" <<EOF
@@ -559,33 +559,33 @@ inner-loop-l1)
   ok "内側ループの全ラウンドで L1 が走り、コミットも積まれる"
   ;;
 
-# 差し戻しの往復中もコミットする。ただしメッセージ生成の judge は呼ばない。
+# 差し戻しの往復中もコミットし、メッセージも通常どおり生成する。
 auto-commit-inner-loop)
   init_git
   git -C "$WORK" checkout -q -b feature/loop
   stub_npm
   stub_claude
 
-  # 往復中: コミットはするが claude は呼ばない
+  # 往復中: コミットし、メッセージ生成も呼ぶ (金額を理由に品質を落とさない)
   before=$(commit_count)
   echo "work 1" >>"$WORK/feature.txt"
   autocommit true >/dev/null || ng "往復中の exit が 0 でない"
   [ "$(commit_count)" -eq "$((before + 1))" ] ||
     ng "往復中にコミットしていない (無人実行で成果が失われる)"
-  [ "$(calls_count '^claude')" -eq 0 ] || ng "往復中に judge を呼んだ (往復ごとに課金される)"
-  git -C "$WORK" log -1 --pretty=%s | grep -q '^chore: 自動コミット' ||
-    ng "往復中のメッセージが定型フォールバックでない: $(git -C "$WORK" log -1 --pretty=%s)"
+  [ "$(calls_count '^claude')" -eq 1 ] || ng "往復中にメッセージ生成を呼んでいない"
+  git -C "$WORK" log -1 --pretty=%s | grep -q 'スタブ生成メッセージ' ||
+    ng "往復中に生成メッセージを使っていない: $(git -C "$WORK" log -1 --pretty=%s)"
 
-  # 素直に終わったターン: judge でメッセージを生成する
+  # 素直に終わったターン: 同じくメッセージを生成する
   before=$(commit_count)
   echo "work 2" >>"$WORK/feature.txt"
   autocommit false >/dev/null || ng "通常ターンの exit が 0 でない"
   [ "$(commit_count)" -eq "$((before + 1))" ] || ng "通常ターンでコミットしていない"
-  [ "$(calls_count '^claude')" -eq 1 ] || ng "通常ターンで judge を呼んでいない"
+  [ "$(calls_count '^claude')" -eq 2 ] || ng "通常ターンでメッセージ生成を呼んでいない"
   git -C "$WORK" log -1 --pretty=%s | grep -q 'スタブ生成メッセージ' ||
     ng "通常ターンで生成メッセージを使っていない"
 
-  ok "往復中もコミットし、そのときだけ judge を呼ばない"
+  ok "往復中も通常ターンもコミットし、メッセージを生成する"
   ;;
 
 # ---------------------------------------------------------------------------
@@ -599,6 +599,62 @@ goal-budget)
   goalgate >/dev/null 2>&1 || ng "予算超過時の exit が 0 でない"
   [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
   ok "経過時間の超過で stalled になる"
+  ;;
+
+# 停止条件 3 の既定値: LOOP.md の max_minutes_per_run を goal.md に引き継ぐ。
+# README が「goal-gate が停止条件として効かせる」と書いているのに、goal-gate は
+# LOOP.md を一度も読まず 60 を固定で使っていた(宣言した予算が効かない状態だった)。
+goal-minutes-from-loop)
+  init_git
+  mkdir -p "$WORK/.claude"
+  # max_minutes 行を持たない goal.md = ensure_field が既定値を埋める経路
+  cat >"$WORK/.claude/goal.md" <<'EOF'
+---
+status: active
+round: 0
+max_rounds: 5
+---
+# ゴール: eval
+
+## 完了条件
+
+- [ ] DC-1: 何か
+EOF
+  cat >"$WORK/LOOP.md" <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 15
+---
+EOF
+  goalgate >/dev/null 2>&1
+  [ "$(goal_field max_minutes)" = "15" ] ||
+    ng "LOOP.md の max_minutes_per_run が既定値に使われていない (max_minutes=$(goal_field max_minutes))"
+
+  # LOOP.md が無ければ従来どおり 60
+  rm -f "$WORK/LOOP.md"
+  cat >"$WORK/.claude/goal.md" <<'EOF'
+---
+status: active
+round: 0
+max_rounds: 5
+---
+# ゴール: eval
+
+## 完了条件
+
+- [ ] DC-1: 何か
+EOF
+  goalgate >/dev/null 2>&1
+  [ "$(goal_field max_minutes)" = "60" ] ||
+    ng "LOOP.md 不在時の既定が 60 でない (max_minutes=$(goal_field max_minutes))"
+
+  # 導線側の穴も塞ぐ: テンプレートに max_minutes 行があると ensure_field が上書きしないため、
+  # 実装がいくら正しくても /crystal:goal が作った goal.md では LOOP.md の宣言が効かなくなる
+  grep -qE '^max_minutes:' "$ROOT/templates/goal.md" &&
+    ng "templates/goal.md に max_minutes 行がある (LOOP.md の宣言が導線で無効化される)"
+
+  ok "LOOP.md の max_minutes_per_run が goal.md の予算の既定値になる"
   ;;
 
 # 停止条件 4: 差分に変化がないラウンドが続いたら stalled
