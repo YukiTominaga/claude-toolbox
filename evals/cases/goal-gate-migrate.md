@@ -2,7 +2,7 @@
 id: goal-gate-migrate
 type: command
 description: 旧形式の goal.md にも停止条件のフィールドを補える
-run: evals/bin/loop-cases.sh goal-migrate
+run: evals/bin/hook-cases.sh goal-migrate
 expect_exit: 0
 expect_output: ^OK:
 ---

@@ -68,14 +68,25 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 
 ## `next` の場合(1 イテレーション)
 
-**手順を飛ばさないこと。特に 1 と 6 は省略しない。**
+**手順を飛ばさないこと。特に 0 と 1 と 6 は省略しない。**
 
+0. **前回までの文脈を読む**(これを飛ばすと同じ壁に二度当たる):
+   - `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-log.sh" --recent 5` で直近の結果を読む。
+     取り出す項目が以前 `blocked` / `failed` になっていたら、そのメモを踏まえてから着手する
+   - `docs/signals/` があれば `grep -l 'status: open' docs/signals/S-*.md` で未処理の発見を確認し、
+     今回の項目に関係するものがあれば読む
 1. `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-guard.sh"` を実行する。
    exit 1 なら理由をそのまま報告して**何もせずに終了する**(予算超過・paused)
 2. `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-next.sh"` を実行する。
-   exit 3 なら「キューが枯れた」と報告して終了する。以降、取得した JSON の
-   `id` / `title` / `spec` を使う
-3. `LOOP.md` の「2. スコープ」と「ゲート」を読む。この項目がスコープ外なら、
+   exit 3(キューが枯れた)の場合:
+   - `docs/signals/` に `status: open` の signal があれば、そのタイトルを一覧で提示し、
+     **backlog に昇格するかユーザーに確認する**(昇格したらその signal を `status: converted` にする)
+   - **無人実行中(`CRYSTAL_UNATTENDED=1`)は昇格させず、枯渇したことだけ報告して終了する**。
+     仕事を自分で作らない
+   - open な signal も無ければ「キューが枯れた」と報告して終了する
+
+   以降、取得した JSON の `id` / `title` / `spec` を使う
+3. `LOOP.md` の「2. 作業範囲」と「ゲート」を読む。この項目が範囲外なら、
    `loop-log.sh <id> blocked "スコープ外"` を記録して終了する
 3.5. **作業ブランチを確保する**。現在のブランチが `main` / `master` / detached HEAD なら、
    `git switch -c loop/<id>`(例: `loop/Q-8`)で feature ブランチを作って切り替える。
@@ -91,15 +102,29 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
      同じ手順で `docs/spec/<id>.md` を作成し、`crystal:spec-critic` にかけて指摘を反映する
    - 疑問が残る場合は勝手に決めず、ユーザーに確認して終了してよい
      (`loop-log.sh <id> blocked "要確認: ..."` を残す)
-5. `/crystal:goal` と同じ手順で `.claude/goal.md` を作成する。仕様の AC-* を DC-* に取り込み、
-   `max_minutes` は `LOOP.md` の `max_minutes_per_run` を既定値にする。
+5. **実装に着手する前に** `/crystal:goal` と同じ手順で `.claude/goal.md` を作成する。
+   仕様の AC-* を DC-* に取り込み、`max_minutes` は `LOOP.md` の `max_minutes_per_run` を
+   既定値にする。**必ず `status: active` で作り、自分で `done` に書き換えないこと**
+   (`done` にするのは goal-gate の仕事)。
    **ここから先の反復は goal-gate が駆動する**ので、このコマンドは実装を進めるだけでよい
 6. ゴールが `status: done` になったら `crystal:verifier` を起動して独立検証する。
-   verifier が「満たさない」を返した場合は修正して再検証する(自己採点で済ませない)
+   verifier が「満たさない」を返した場合は修正して再検証する(自己採点で済ませない)。
+
+   **その前に `.claude/goal.md` の `round` を確認する**。`round: 0` のまま `done` に
+   なっているなら、**内側ループが一度も動いていない**(goal-gate が判定していない)。
+   実装後に goal.md を作った、または自分で `done` に書き換えた場合にこうなる。
+   このときは自己採点しかされていないので、そのまま完了扱いにせず、
+   `.claude/loop/judge-log.jsonl` の有無を添えてユーザーに報告すること
 7. 記録して次へ:
    - `docs/backlog.md` の該当行を `- [ ]` から `- [x]` に変える
      (`status: stalled` で終わった場合は変えない)
    - `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-log.sh" <id> <done|failed|blocked> <ラウンド数> "<一行メモ>"`
+     メモには**次のイテレーションが読んで役に立つこと**を書く(手順 0 で読まれる)。
+     「何に詰まったか」「次に何を試すか」を含める。「完了」だけのメモは書かない
+   - `blocked` / `failed` で終わった場合、または goal が `status: stalled` で終わった場合は、
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/signal-add.sh" "<一行>" "<id>" "<本文>"` で発見を 1 件残す
+     (`docs/signals/` がある場合のみ)。verifier が「満たさない」と返し、その原因が
+     この項目の外にあるときも同様
    - **feature ブランチへの push はしてよい**(未 push のコミットは環境が消えると失われ、
      かつ feature ブランチへの push は可逆であるため)。
      **PR の作成・マージはしない** — `LOOP.md` の「ゲート」に該当するので、
@@ -109,12 +134,16 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 
 ## `refill` の場合
 
-**先に GitHub MCP のツール(`list_issues`)が使えるかを確認する。使えない場合は
-その旨を報告して終了する**(このセッションに GitHub の接続が無い、と伝える。
-ラベルを尋ねてから失敗させない)。
+**先に Issue の取得手段があるかを確認する。ラベルを尋ねてから失敗させない**:
 
-`LOOP.md` の frontmatter `issue_labels` を読み、GitHub MCP の `list_issues` で
-そのラベルの open な Issue を取得する(`issue_labels` が空ならユーザーにラベルを尋ねる)。
+1. GitHub MCP の `list_issues` が使えるならそれを使う
+2. 使えない場合は `gh` CLI にフォールバックする。`gh auth status` が通るなら
+   `gh issue list --label "<ラベル>" --state open --json number,title` を使う。
+   **無人実行 (`CRYSTAL_UNATTENDED=1`) では MCP が無いのでこちらが本線になる**
+3. どちらも使えなければ、その旨を報告して終了する
+
+`LOOP.md` の frontmatter `issue_labels` を読み、そのラベルの open な Issue を取得する
+(`issue_labels` が空の場合、対話中ならユーザーにラベルを尋ね、無人実行なら何もせず終了する)。
 `docs/backlog.md` に**まだ無いものだけ**を末尾に追記する:
 
 ```
@@ -130,8 +159,9 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 (`--check` なしで呼ぶと、状態を見ただけで実行 1 回分の予算を消費する)。
 
 - `LOOP.md` の status / 予算
-- `.claude/loop/run-log.jsonl` の直近 10 件と、本日の実行回数
+- 台帳の直近 10 件(`loop-log.sh --recent 10`)と、本日の実行回数
 - `docs/backlog.md` の未着手 / 完了の件数
+- `docs/signals/` の `status: open` な件数(あれば)
 - `.claude/goal.md` があればその status / round
 
 を表形式で報告する。ファイルが無いものは「未設定」と書く。

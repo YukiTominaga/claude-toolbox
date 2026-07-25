@@ -1,8 +1,11 @@
 #!/bin/bash
-# loop-cases.sh — evals/cases/loop-*.md から呼ばれるシナリオ実行ヘルパー。
+# loop-cases.sh — loop スクリプト (loop-next / loop-add / loop-guard / loop-log) の
+# シナリオ実行ヘルパー。
 # 使い方: loop-cases.sh <シナリオ名>
 # 一時ディレクトリに最小のプロジェクトを作り、期待どおりかを検証する。
 # 成功時は "OK: ..." を出して exit 0、失敗時は "NG: ..." を出して exit 1。
+#
+# hooks/*.sh とその相互作用のシナリオは hook-cases.sh にある。
 set -u
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -24,20 +27,33 @@ next() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-next.sh" "$@"; }
 add() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-add.sh" "$@" 2>/dev/null; }
 guard() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" "$@"; }
 loglog() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" "$@"; }
-# hook は PATH から claude を外して呼ぶ。eval が実際の判定器 (Haiku) を叩くと
-# 遅く・課金され・出力が非決定的になるため。停止条件や機密検知などの検証したい層は
-# いずれも claude の有無より手前で効くので、これで十分に本番経路を通せる。
-goalgate() {
-  printf '{"transcript_path":"","session_id":"eval","stop_hook_active":false}' |
-    CLAUDE_PROJECT_DIR="$WORK" PATH=/usr/bin:/bin bash "$ROOT/hooks/goal-gate.sh"
-}
+signal() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/signal-add.sh" "$@" 2>/dev/null; }
+run() { CLAUDE_PROJECT_DIR="$WORK" CRYSTAL_LOOP_CMD="$WORK/bin/loopcmd" "$ROOT/scripts/loop-run.sh"; }
 
-autocommit() { # $1=stop_hook_active (省略時 false)
-  printf '{"stop_hook_active":%s}' "${1:-false}" |
-    CLAUDE_PROJECT_DIR="$WORK" PATH=/usr/bin:/bin bash "$ROOT/hooks/auto-commit.sh"
+# 無人ループの中身 (claude -p) を差し替えるスタブ。
+# $1 = judged    判定器を通して正常終了する
+#      unjudged  done と記録するが判定器を通さない (自己採点だけ)
+#      aborted   予算上限などで打ち切られる (記帳まで到達しない)
+stub_loop_cmd() {
+  mkdir -p "$WORK/bin" "$WORK/.claude/loop"
+  cat >"$WORK/bin/loopcmd" <<EOF
+#!/bin/bash
+# どの上限で起動されたかを記録する
+echo "\$*" >"$WORK/loopcmd-args"
+# エージェントが 1 イテレーションを終えた状態を作る
+CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" >/dev/null 2>&1
+if [ "$1" = "aborted" ]; then
+  printf '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":3.31}'
+  exit 0
+fi
+CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" Q-1 done 1 "スタブ" >/dev/null 2>&1
+if [ "$1" = "judged" ]; then
+  echo '{"round":1,"met":true}' >>"$WORK/.claude/loop/judge-log.jsonl"
+fi
+printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1.25}'
+EOF
+  chmod +x "$WORK/bin/loopcmd"
 }
-
-commit_count() { git -C "$WORK" rev-list --count HEAD 2>/dev/null || echo 0; }
 
 write_queue() {
   mkdir -p "$WORK/docs"
@@ -45,44 +61,6 @@ write_queue() {
 }
 
 write_loop() { cat >"$WORK/LOOP.md"; }
-
-# .claude/goal.md を作る。$1=max_no_progress $2=started_epoch $3=max_minutes
-write_goal() {
-  mkdir -p "$WORK/.claude"
-  cat >"$WORK/.claude/goal.md" <<EOF
----
-status: active
-round: 0
-max_rounds: 5
-no_progress: 0
-max_no_progress: $1
-last_sig:
-started_epoch: $2
-max_minutes: $3
-created: 2026-01-01
-spec:
----
-# ゴール: eval
-
-## 完了条件
-
-- [ ] DC-1: 何か
-EOF
-}
-
-init_git() {
-  git -C "$WORK" init -q .
-  git -C "$WORK" config user.email eval@example.com
-  git -C "$WORK" config user.name eval
-  echo seed >"$WORK/seed.txt"
-  git -C "$WORK" add seed.txt
-  git -C "$WORK" commit -qm seed
-}
-
-goal_field() { # $1=key
-  awk -v k="$1" '/^---$/{fm++; next} fm==1 && $0 ~ "^"k":" { sub("^"k": *",""); print; exit }' \
-    "$WORK/.claude/goal.md"
-}
 
 case "$SCENARIO" in
 
@@ -186,6 +164,132 @@ EOF
   ok "--check は記録せず判定だけ返す"
   ;;
 
+# 予算ゲート: 実費の上限。無人実行が積んだ cost 行を合計して判定する
+guard-cost)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 99
+max_minutes_per_run: 30
+max_cost_usd_per_day: 5.0
+---
+EOF
+  out=$(guard --check) || ng "上限未達なのに拒否した"
+  printf '%s' "$out" | jq -e '.cost_today_usd == 0' >/dev/null || ng "cost_today_usd が 0 でない"
+  printf '%s' "$out" | jq -e '.cost_remaining_usd == 5' >/dev/null || ng "残り予算が返っていない"
+  printf '%s' "$out" | jq -e '.max_turns_per_run == 300' >/dev/null || ng "ターン上限の既定が 300 でない"
+
+  mkdir -p "$WORK/.claude/loop"
+  ts=$(date -Iseconds)
+  printf '{"ts":"%s","event":"cost","cost_usd":3.2}\n{"ts":"%s","event":"cost","cost_usd":1.0}\n' \
+    "$ts" "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
+  out=$(guard --check) || ng "4.2/5.0 で拒否した"
+  printf '%s' "$out" | jq -e '.cost_today_usd == 4.2' >/dev/null || ng "合計が 4.2 でない"
+  printf '%s' "$out" | jq -e '(.cost_remaining_usd - 0.8) | fabs < 0.001' >/dev/null ||
+    ng "残りが 0.8 でない"
+
+  printf '{"ts":"%s","event":"cost","cost_usd":1.0}\n' "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
+  guard --check >/dev/null 2>&1 && ng "上限を超えても実行が許可された"
+
+  # 昨日のコストは今日の予算を食わない
+  printf '{"ts":"2020-01-01T00:00:00+09:00","event":"cost","cost_usd":99}\n' \
+    >>"$WORK/.claude/loop/run-log.jsonl"
+  out=$(guard --check 2>/dev/null)
+  printf '%s' "$out" | jq -e '.cost_today_usd == 5.2' >/dev/null || ng "他の日のコストを合計した"
+
+  # 上限が未設定なら実費では判定しない(対話セッションの構成)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 99
+max_minutes_per_run: 30
+---
+EOF
+  out=$(guard --check) || ng "上限未設定なのに拒否した"
+  printf '%s' "$out" | jq -e 'has("cost_remaining_usd")' >/dev/null && ng "未設定なのに残り予算を返した"
+  ok "実費の上限を台帳の合計で判定する"
+  ;;
+
+# 無人実行: 判定器を通った 1 イテレーション。実費を記録し、予算は 1 回だけ消費する
+run-normal)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 30
+max_turns_per_run: 123
+---
+EOF
+  stub_loop_cmd judged
+  out=$(run) || ng "正常な 1 イテレーションで exit が 0 でない: $out"
+  printf '%s' "$out" | grep -q '判定 1 回' || ng "判定回数が報告されていない: $out"
+
+  # 暴走の歯止めはターン数。**金額では止めない**(サブスクでは追加課金が無く意味を持たない)
+  args=$(cat "$WORK/loopcmd-args")
+  printf '%s' "$args" | grep -q -- '--max-turns 123' || ng "ターン上限が渡っていない: $args"
+  printf '%s' "$args" | grep -q -- '--max-budget-usd' &&
+    ng "実費の上限が未設定なのに金額で止めようとしている: $args"
+
+  ledger="$WORK/.claude/loop/run-log.jsonl"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] ||
+    ng "1 イテレーションで予算を $(grep -c '"event":"start"' "$ledger") 回消費した (ゲートの二重通過)"
+  # 実費は止めるためではなく、1 イテレーションの重さを測るために記録し続ける
+  [ "$(grep -c '"event":"cost"' "$ledger")" -eq 1 ] || ng "実費が記録されていない"
+  grep '"event":"cost"' "$ledger" | jq -e '.cost_usd == 1.25' >/dev/null || ng "実費の値が違う"
+  ok "ターン数で暴走を止め、実費は記録だけする"
+  ;;
+
+# 無人実行: done と報告されたのに判定器が動いていないイテレーションを検出する
+run-detects-unjudged)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 30
+---
+EOF
+  stub_loop_cmd unjudged
+  out=$(run 2>&1) && ng "内側ループが素通しされたのに成功として扱った"
+  printf '%s' "$out" | grep -q '内側ループが動いていない' || ng "理由が報告されていない: $out"
+
+  # 次のイテレーションが手順 0 で読めるよう、台帳に failed が残る
+  last=$(loglog --recent 1)
+  [ "$(printf '%s' "$last" | jq -r .result)" = "failed" ] ||
+    ng "台帳に failed が残っていない: $last"
+  [ "$(printf '%s' "$last" | jq -r .item_id)" = "Q-1" ] || ng "item_id が引き継がれていない"
+  ok "判定器を通らなかったイテレーションを検出して failed に落とす"
+  ;;
+
+# 無人実行: 途中で打ち切られたイテレーションを台帳に残す
+run-records-abort)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 30
+---
+EOF
+  write_queue <<'EOF'
+# バックログ
+- [ ] Q-1: 何かやる
+EOF
+  stub_loop_cmd aborted
+  out=$(run 2>&1) && ng "打ち切られたのに成功として扱った"
+  printf '%s' "$out" | grep -q 'error_max_budget_usd' || ng "理由が報告されていない: $out"
+
+  # エージェントは手順 7 まで到達できないので、loop-run.sh が代わりに記録する
+  last=$(loglog --recent 1)
+  [ -n "$last" ] || ng "台帳に何も残っていない (次の周回が状況を読めない)"
+  [ "$(printf '%s' "$last" | jq -r .result)" = "failed" ] || ng "failed で記録されていない: $last"
+  [ "$(printf '%s' "$last" | jq -r .item_id)" = "Q-1" ] || ng "キュー先頭の id が記録されていない"
+  printf '%s' "$last" | jq -r .notes | grep -q '中断' || ng "中断であることがメモに無い"
+
+  # 実費は打ち切られた分も記録する (しないと失敗を繰り返すループが無限に課金できる)
+  grep '"event":"cost"' "$WORK/.claude/loop/run-log.jsonl" | jq -e '.cost_usd == 3.31' >/dev/null ||
+    ng "打ち切られた実行のコストが記録されていない"
+  ok "打ち切られたイテレーションを台帳に残す"
+  ;;
+
 # 予算ゲート: paused の間は動かない
 guard-paused)
   write_loop <<'EOF'
@@ -198,6 +302,55 @@ EOF
   ok "paused では実行しない"
   ;;
 
+# 台帳: --recent が結果行だけを新しい順に返す(次のイテレーションが読む口)
+log-recent)
+  [ -z "$(loglog --recent 5)" ] || ng "台帳が無いのに何か出力した"
+
+  guard >/dev/null 2>&1 # start 行を 1 行作る (LOOP.md が無いので fail-open だが台帳は作らない)
+  loglog Q-1 done 1 "1件目" >/dev/null
+  loglog Q-2 blocked 2 "2件目" >/dev/null
+  loglog Q-3 failed 3 "3件目" >/dev/null
+
+  out=$(loglog --recent 2)
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" -eq 2 ] || ng "件数が 2 でない"
+  [ "$(printf '%s\n' "$out" | head -n1 | jq -r .item_id)" = "Q-3" ] || ng "新しい順になっていない"
+  [ "$(printf '%s\n' "$out" | tail -n1 | jq -r .item_id)" = "Q-2" ] || ng "2 件目が Q-2 でない"
+
+  # 予算の集計用の行 (start / cost) は混ざらない。
+  # 除外リスト方式だと行種を足すたびに読み側が壊れるので、両方を明示的に見る
+  printf '{"ts":"2026-01-01T00:00:00+09:00","event":"start"}\n' >>"$WORK/.claude/loop/run-log.jsonl"
+  printf '{"ts":"2026-01-01T00:00:00+09:00","event":"cost","cost_usd":1.25}\n' >>"$WORK/.claude/loop/run-log.jsonl"
+  loglog --recent 10 | grep -q '"event":"start"' && ng "start 行が混ざっている"
+  loglog --recent 10 | grep -q '"event":"cost"' && ng "cost 行が混ざっている"
+
+  [ "$(loglog --recent | wc -l | tr -d ' ')" -eq 3 ] || ng "既定件数が 5 になっていない"
+  ok "--recent が結果行だけを新しい順に返す"
+  ;;
+
+# signals: 採番が連番になり、frontmatter が揃う
+signal-add-numbering)
+  signal "最初の気づき" >/dev/null 2>&1
+  [ "$?" -eq 3 ] || ng "docs/signals/ が無いときの exit が 3 でない"
+
+  mkdir -p "$WORK/docs/signals"
+  [ "$(signal "最初の気づき" "Q-1" "本文")" = "S-1" ] || ng "空のときに S-1 にならない"
+  [ "$(signal "2件目" "" "本文")" = "S-2" ] || ng "連番が S-2 にならない"
+  [ -f "$WORK/docs/signals/S-2.md" ] || ng "ファイル名が S-<n>.md でない"
+
+  # README.md が採番に混ざってはいけない
+  [ "$(signal "3件目")" = "S-3" ] || ng "README.md を数えてしまっている"
+
+  for k in id created source status; do
+    grep -qE "^$k:" "$WORK/docs/signals/S-1.md" || ng "frontmatter に $k が無い"
+  done
+  grep -qE '^status: open$' "$WORK/docs/signals/S-1.md" || ng "初期 status が open でない"
+  grep -qE '^# 最初の気づき$' "$WORK/docs/signals/S-1.md" || ng "タイトルが見出しになっていない"
+
+  signal "" >/dev/null 2>&1
+  [ "$?" -eq 1 ] || ng "空タイトルを受け付けた"
+  ok "signals の採番・書式・エラー処理が期待どおり"
+  ;;
+
 # 台帳: 想定外の result を受け付けない
 log-reject)
   loglog Q-1 wrong >/dev/null 2>&1 && ng "不正な result を受け付けた"
@@ -206,177 +359,6 @@ log-reject)
   [ "$(wc -l <"$WORK/.claude/loop/run-log.jsonl")" -eq 1 ] || ng "台帳の行数が 1 でない"
   jq -e . "$WORK/.claude/loop/run-log.jsonl" >/dev/null || ng "台帳が JSON として不正"
   ok "不正な result を弾き、正常時は 1 行追記する"
-  ;;
-
-# 停止条件 3: 経過時間が max_minutes を超えたら stalled
-goal-budget)
-  init_git
-  write_goal 2 "$(($(date +%s) - 7200))" 60
-  goalgate >/dev/null 2>&1 || ng "予算超過時の exit が 0 でない"
-  [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
-  ok "経過時間の超過で stalled になる"
-  ;;
-
-# 停止条件 4: 差分に変化がないラウンドが続いたら stalled
-goal-no-progress)
-  init_git
-  write_goal 1 "$(date +%s)" 60
-  sig=$(cd "$WORK" && { git rev-parse HEAD; git diff HEAD; git status --porcelain; } 2>/dev/null |
-    cksum | tr -d ' ')
-  sed -i.bak "s/^last_sig:.*/last_sig: $sig/" "$WORK/.claude/goal.md" && rm -f "$WORK/.claude/goal.md.bak"
-  goalgate >/dev/null 2>&1
-  [ "$?" -eq 0 ] || ng "無進捗の上限到達時の exit が 0 でない"
-  [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
-  ok "無進捗の継続で stalled になる"
-  ;;
-
-# 旧形式(新フィールドを持たない)の goal.md でも動き、フィールドが補われる
-# ラウンド上限で必ず止まる形にして、判定器 (claude CLI) を呼ばずに完結させる
-goal-migrate)
-  init_git
-  mkdir -p "$WORK/.claude"
-  printf -- '---\nstatus: active\nround: 5\nmax_rounds: 5\n---\n# ゴール\n\n## 完了条件\n\n- [ ] DC-1: x\n' \
-    >"$WORK/.claude/goal.md"
-  goalgate >/dev/null 2>&1 || ng "ラウンド上限到達時の exit が 0 でない"
-  for k in no_progress max_no_progress last_sig started_epoch max_minutes; do
-    grep -qE "^$k:" "$WORK/.claude/goal.md" || ng "$k が補われていない"
-  done
-  [ "$(goal_field round)" = "6" ] || ng "round が進んでいない"
-  [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
-  ok "旧形式の goal.md に停止条件のフィールドを補い、上限で止まる"
-  ;;
-
-# hook 相互作用: goal-gate と auto-commit を同じターンで動かしても誤 stall しない
-# (単体シナリオだけでは、auto-commit が作業ツリーを空にすることで goal-gate の
-#  無進捗検知が前進を停滞と誤判定する不具合を捕まえられなかった)
-goal-gate-with-auto-commit)
-  init_git
-  git -C "$WORK" checkout -q -b feature/loop
-  mkdir -p "$WORK/.claude"
-  echo ".claude/goal.md" >"$WORK/.gitignore"
-  cat >"$WORK/.claude/goal.md" <<EOF
----
-status: active
-round: 0
-max_rounds: 20
-no_progress: 0
-max_no_progress: 2
-last_sig:
-started_epoch: $(date +%s)
-max_minutes: 600
----
-# ゴール: eval
-
-## 完了条件
-
-- [ ] DC-1: x
-EOF
-
-  # 1 ターン = エージェントの作業 → (Stop) goal-gate → auto-commit
-  # $1 = none        何もしない (完全な停滞)
-  #      dirty       変更を残したまま終える (auto-commit がコミットする)
-  #      committed   ターン中に自分でコミットまで済ませる ← 誤 stall はここで起きる
-  ac_turn() {
-    case "$1" in
-    dirty) echo "work $2" >>"$WORK/feature.txt" ;;
-    committed)
-      echo "work $2" >>"$WORK/feature.txt"
-      git -C "$WORK" add -A
-      git -C "$WORK" commit -qm "feat: work $2"
-      ;;
-    esac
-    goalgate >/dev/null 2>&1
-    autocommit >/dev/null 2>&1
-  }
-
-  # rules が「feature ブランチでは自由にコミット」なので、ターン中に自分でコミットするのが
-  # 通常運転になる。この場合 Stop 時点の作業ツリーは空で、作業ツリーだけを署名にしていると
-  # 毎ラウンド同一になり、前進しているのに停滞と誤判定される。
-  for i in 1 2 3 4; do ac_turn committed "$i"; done
-  [ "$(goal_field status)" = "active" ] ||
-    ng "自分でコミットしながら前進しているのに stalled になった (round=$(goal_field round), no_progress=$(goal_field no_progress))"
-
-  # 変更を残して終えるターン (auto-commit 任せ) でも誤判定しないこと
-  for i in 5 6; do ac_turn dirty "$i"; done
-  [ "$(goal_field status)" = "active" ] || ng "auto-commit 任せの前進で stalled になった"
-  [ "$(git -C "$WORK" rev-list --count HEAD)" -ge 6 ] || ng "コミットが積まれていない"
-
-  # 手が止まったら検知できること (検知能力を失っていないことの確認)
-  for i in 7 8 9; do ac_turn none "$i"; done
-  [ "$(goal_field status)" = "stalled" ] || ng "完全に停滞したのに stalled にならない"
-
-  ok "自分でコミットしても誤 stall せず、停滞したら検知する"
-  ;;
-
-# 自動コミット: feature ブランチでは未追跡ファイルごとコミットする
-auto-commit-basic)
-  init_git
-  git -C "$WORK" checkout -q -b feature/x
-  before=$(commit_count)
-  echo "変更" >>"$WORK/seed.txt"
-  mkdir -p "$WORK/docs" && echo "新規" >"$WORK/docs/new.md"
-  autocommit >/dev/null || ng "auto-commit の exit が 0 でない"
-  [ "$(commit_count)" -eq "$((before + 1))" ] || ng "コミットが 1 つ増えていない"
-  [ -z "$(git -C "$WORK" status --porcelain)" ] || ng "作業ツリーに変更が残っている"
-  git -C "$WORK" show --stat --oneline HEAD | grep -q 'docs/new.md' || ng "未追跡ファイルが含まれていない"
-  git -C "$WORK" log -1 --pretty=%s | grep -qE '^(chore|feat|fix|docs|refactor|test):' ||
-    ng "コミットメッセージが Conventional Commits 形式でない"
-  ok "feature ブランチで未追跡ごと 1 コミットにまとめた"
-  ;;
-
-# 自動コミット: 動いてはいけない場面で動かない
-auto-commit-skip)
-  init_git
-  echo "変更" >>"$WORK/seed.txt"
-
-  # main では動かない (rules/git-workflow.md の「main に直接コミットしない」)
-  git -C "$WORK" branch -M main
-  before=$(commit_count)
-  autocommit >/dev/null
-  [ "$(commit_count)" -eq "$before" ] || ng "main でコミットしてしまった"
-
-  # 差し戻しの往復中 (stop_hook_active) は動かない
-  git -C "$WORK" checkout -q -b feature/y
-  autocommit true >/dev/null
-  [ "$(commit_count)" -eq "$before" ] || ng "stop_hook_active でコミットしてしまった"
-
-  # 変更が無ければ何もしない
-  git -C "$WORK" add -A && git -C "$WORK" commit -qm manual
-  before=$(commit_count)
-  autocommit >/dev/null
-  [ "$(commit_count)" -eq "$before" ] || ng "変更が無いのにコミットした"
-
-  # マージ途中では動かない (git-dir は必ず絶対パスで解決する。相対パスだと
-  # このスクリプトの cwd 側 = 実リポジトリに MERGE_HEAD を作ってしまう)
-  echo "変更2" >>"$WORK/seed.txt"
-  merge_head="$(git -C "$WORK" rev-parse --absolute-git-dir)/MERGE_HEAD"
-  : >"$merge_head"
-  autocommit >/dev/null
-  rm -f "$merge_head"
-  [ "$(commit_count)" -eq "$before" ] || ng "マージ途中にコミットした"
-
-  ok "main / 差し戻し中 / 無変更 / マージ途中では動かない"
-  ;;
-
-# 自動コミット: 機密の可能性があるパスは中止して知らせる
-auto-commit-secret)
-  init_git
-  git -C "$WORK" checkout -q -b feature/z
-  before=$(commit_count)
-  echo "変更" >>"$WORK/seed.txt"
-  echo "API_KEY=xxx" >"$WORK/.env"
-  out=$(autocommit) || ng "auto-commit の exit が 0 でない"
-  [ "$(commit_count)" -eq "$before" ] || ng "機密パスがあるのにコミットした"
-  printf '%s' "$out" | jq -e '.systemMessage' >/dev/null 2>&1 || ng "systemMessage で知らせていない"
-  printf '%s' "$out" | grep -q '\.env' || ng "検出したパスを示していない"
-
-  # .gitignore に入れれば通常どおりコミットされる
-  echo ".env" >>"$WORK/.gitignore"
-  autocommit >/dev/null || ng "除外後の exit が 0 でない"
-  [ "$(commit_count)" -eq "$((before + 1))" ] || ng "除外後にコミットされていない"
-  git -C "$WORK" show --stat --oneline HEAD | grep -q '\.env$' && ng ".env がコミットに含まれている"
-
-  ok "機密パスは中止して知らせ、除外後は通常どおり動く"
   ;;
 
 *)

@@ -1,55 +1,90 @@
 #!/bin/bash
 # stop-gate.sh — 完了宣言時の検証ゲート
-# Claude が応答を終えようとしたとき、リポジトリに変更があれば
-# テスト・型チェック・lint を実行し、失敗していれば exit 2 で差し戻す。
+# Claude が応答を終えようとしたとき、リポジトリに変更があれば L1 検証を実行し、
+# 失敗していれば exit 2 で差し戻す。検証の中身は scripts/project-checks.sh にある。
+#
+# ゴール(.claude/goal.md)が動いているセッションでは goal-gate が毎ラウンド同じ検証を行うが、
+# **このフックは goal.md を読まない**。双方が同じファイルを別々に解釈してズレると
+# 「どちらも検証しない」に倒れるため。読まなければ最悪でも「二重実行(無駄)」に倒れる。
+#
+# 差し戻し後の再停止 (stop_hook_active: true) でも検証する。ここを素通しにすると、
+# goal.md の無いセッションでは一度差し戻された時点で L1 が二度と走らなくなる。
+# 暴走防止は「連鎖内で通算 MAX_PUSHBACK 回まで」というカウントが担う。
 set -u
 
-input=$(cat)
+MAX_PUSHBACK=3
 
-# --- 再帰防止: このフックによる差し戻し後の再停止では素通しする ---
-if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
-  exit 0
-fi
+# --- プラグインルートの解決は cd より前に行う ---
+ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+input=$(cat)
+active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 
 # --- git 管理下でなければ対象外 ---
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
+STATE_DIR=".claude/loop"
+STATE="$STATE_DIR/stop-gate-pushback"
+
+# --- 連鎖が切れた合図を最優先で処理する ---
+# stop_hook_active: false は「前の差し戻し連鎖が終わった」という意味なので、
+# **変更判定より前に**カウントを 0 に戻す。後ろに置くと、auto-commit が作業ツリーを
+# 空にする運用では clean な false 停止が常態になり、カウントが次の連鎖へ持ち越される。
+# その結果、一度も差し戻していない連鎖の初回停止で L1 を飛ばし、
+# 事実に反する「差し戻し上限に達した」を出す(独立検証が捕まえた欠陥)。
+#
+# ファイルが無ければカウントは実質 0 なので何もしない。ここで作らないことで、
+# ループを使っていないプロジェクトに .claude/loop/ を生やさずに済む。
+if [ "$active" != "true" ] && [ -f "$STATE" ]; then
+  printf '0\n' >"$STATE" 2>/dev/null
+fi
+
 # --- 変更がなければゲート不要(質問応答セッション等) ---
-if git diff --quiet HEAD 2>/dev/null \
-  && git diff --cached --quiet 2>/dev/null \
-  && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+# カウントの置き場である .claude/loop は変更判定から除外する。含めると、記帳しただけの
+# セッションが「変更あり」になり検証が走る。.gitignore に頼らないのは goal-gate と同じ理由。
+own=":(exclude).claude/loop"
+if git diff --quiet HEAD -- . "$own" 2>/dev/null \
+  && git diff --cached --quiet -- . "$own" 2>/dev/null \
+  && [ -z "$(git ls-files --others --exclude-standard -- . "$own")" ]; then
   exit 0
 fi
 
-FAILED=""
-run_check() {
-  local name="$1"; shift
-  local out
-  if ! out=$("$@" 2>&1); then
-    FAILED="${FAILED}\n--- ${name} 失敗 ---\n$(printf '%s' "$out" | tail -n 40)"
-  fi
-}
+CHECKS="$ROOT/scripts/project-checks.sh"
+[ -x "$CHECKS" ] || exit 0
 
-# --- Node / TypeScript プロジェクト ---
-if [ -f package.json ]; then
-  jq -e '.scripts.typecheck' package.json >/dev/null 2>&1 && run_check "typecheck" npm run -s typecheck
-  jq -e '.scripts.lint'      package.json >/dev/null 2>&1 && run_check "lint"      npm run -s lint
-  jq -e '.scripts.test'      package.json >/dev/null 2>&1 && run_check "test"      npm test -- --silent
+# --- 差し戻し回数のカウント ---
+# 書けない環境ではカウントできない。差し戻すと上限が効かず無限ループになるので、
+# 往復中 (active) だけは従来どおり素通しする。初回停止は数えなくても 1 回で済むので検証する。
+# リダイレクト失敗のメッセージは `>>file 2>/dev/null` では消えない(順序の都合)ので先に閉じる
+if ! mkdir -p "$STATE_DIR" 2>/dev/null || ! : 2>/dev/null >>"$STATE"; then
+  [ "$active" = "true" ] && exit 0
+  count=""
+else
+  # false は「連鎖が切れた」合図としてのみ使う(戻ってこない環境でも上限は効く)。
+  if [ "$active" = "true" ]; then
+    count=$(cat "$STATE" 2>/dev/null)
+    case "$count" in '' | *[!0-9]*) count=0 ;; esac
+  else
+    count=0
+  fi
+
+  if [ "$count" -ge "$MAX_PUSHBACK" ]; then
+    printf '{"systemMessage":"stop-gate: 差し戻し上限 (%s 回) に達したため検証を打ち切りました。L1 が赤のままの可能性があります。scripts/project-checks.sh を手で確認してください。"}\n' \
+      "$MAX_PUSHBACK"
+    exit 0
+  fi
 fi
 
-# --- Python プロジェクト ---
-if [ -f pyproject.toml ] || [ -f setup.py ]; then
-  command -v ruff >/dev/null 2>&1 && run_check "ruff" ruff check .
-  if command -v pytest >/dev/null 2>&1 && { [ -d tests ] || [ -d test ]; }; then
-    run_check "pytest" pytest -q
-  fi
-fi
-
-if [ -n "$FAILED" ]; then
-  printf '検証ゲート失敗。以下のエラーを修正するまで完了と報告しないこと。修正後は実際のコマンド出力を根拠として提示すること。%b\n' "$FAILED" >&2
+if ! failed=$("$CHECKS" 2>&1); then
+  [ -n "$count" ] && printf '%s\n' "$((count + 1))" >"$STATE" 2>/dev/null
+  printf '検証ゲート失敗。以下のエラーを修正するまで完了と報告しないこと。修正後は実際のコマンド出力を根拠として提示すること。\n%s\n' "$failed" >&2
   exit 2
 fi
+
+# 緑でもカウントは減らさない(赤緑の往復で上限に到達しなくなるのを防ぐ)。
+# リセットは stop_hook_active: false のときだけ。
+[ -n "$count" ] && [ "$active" != "true" ] && printf '0\n' >"$STATE" 2>/dev/null
 
 exit 0

@@ -2,7 +2,7 @@
 id: auto-commit-basic
 type: command
 description: 自動コミットが feature ブランチで未追跡ファイルごと 1 コミットにまとめる
-run: evals/bin/loop-cases.sh auto-commit-basic
+run: evals/bin/hook-cases.sh auto-commit-basic
 expect_exit: 0
 expect_output: ^OK:
 ---

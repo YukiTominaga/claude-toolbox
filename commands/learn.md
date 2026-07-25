@@ -28,15 +28,24 @@ description: セッションを振り返り、再利用可能な知見を抽出�
 | 汎用的な技術手順で、トリガー条件が明確に書ける | `~/.claude/skills/<name>/SKILL.md` として新規スキル化を**提案**（作成前にユーザーへ内容を確認） |
 | 再発している問題・二度と壊したくない挙動 | `evals/cases/` に eval ケースとして追加を**提案**（`/crystal:eval add` と同形式） |
 | その場で片付かない作業（後日やるべき修正・積み残し） | `docs/backlog.md` に未着手項目として追記（外側ループが後で拾う） |
+| **まだ仕事の形になっていない気づき**（摩擦・取りこぼし・壊れている前提） | `docs/signals/` に 1 件記録（`scripts/signal-add.sh`。詳細は `docs/signals/README.md`） |
+
+`docs/backlog.md` と `docs/signals/` の線引き: **単体で着手できるなら backlog、できないなら signal**。
+signal は誰かが backlog に昇格させて初めて仕事になる。迷ったら signal に置く
+（backlog に着手できない項目が混ざると、ループが先頭で詰まるため）。
 
 ### 2.5. 再発問題の eval ケース化
 
 抽出した問題が次のいずれかで **2回以上** 現れている場合、eval ケース化を提案する:
 
 - プロジェクトの `.claude/learnings.md` の既存エントリ
-- `~/.claude/logs/goal-gate.jsonl` の差し戻し履歴（同種の未達理由の繰り返し）
+- `docs/signals/` の `status: open` な signal（同じ摩擦が繰り返し記録されている）
+- `.claude/loop/judge-log.jsonl` の差し戻し履歴（同種の未達理由の繰り返し）
 - `.claude/loop/run-log.jsonl` の `failed` / `blocked` エントリ（同じ理由で止まっている）
 - 今回のセッション内（同じ失敗を複数回修正した等）
+
+eval ケース化まで済んだ signal は `status: learned` に変え、`.claude/learnings.md` に
+1 エントリ書く（同じ知見を 2 箇所に残さない）。
 
 提案時は id / type (command 優先、主観評価のみ rubric) / run（または rubric の観点）の案を
 示し、ユーザー承認後に `evals/cases/<id>.md` を作成する。形式は templates/eval-case.md に従う。

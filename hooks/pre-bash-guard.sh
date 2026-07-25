@@ -36,6 +36,33 @@ const RULES = [
   },
 ];
 
+// Gates from LOOP.md that require a human's approval. A human is present in an
+// interactive session and can approve, so these are only denied when the loop runs
+// unattended (CRYSTAL_UNATTENDED=1) — there is nobody to ask, and "ask" would mean
+// "hang until the budget runs out".
+const UNATTENDED_RULES = [
+  {
+    re: /\bgh\s+pr\s+(create|merge|ready)\b/i,
+    reason: 'Creating or merging a pull request is a gate; report it instead of doing it',
+  },
+  {
+    re: /\bgit\s+merge\b/i,
+    reason: 'Merging is a gate; report it instead of doing it',
+  },
+  {
+    re: /\b(npm|pnpm|yarn|bun)\s+(i|install|add)\b(?!.*--dry-run)/i,
+    reason: 'Adding or updating dependencies is a gate; report it instead of doing it',
+  },
+  {
+    re: /\b(pip3?|uv)\s+(install|add)\b/i,
+    reason: 'Adding or updating dependencies is a gate; report it instead of doing it',
+  },
+  {
+    re: /\bgit\s+push\b[^|;&]*(--force(?!-with-lease)|\s-f\b)/i,
+    reason: 'Force pushing is out of scope for the loop',
+  },
+];
+
 let raw = '';
 process.stdin.on('data', (d) => (raw += d));
 process.stdin.on('end', () => {
@@ -43,7 +70,9 @@ process.stdin.on('end', () => {
     const input = JSON.parse(raw || '{}');
     const command = String((input.tool_input && input.tool_input.command) || '');
     if (!command) process.exit(0);
-    for (const rule of RULES) {
+    const rules =
+      process.env.CRYSTAL_UNATTENDED === '1' ? RULES.concat(UNATTENDED_RULES) : RULES;
+    for (const rule of rules) {
       if (rule.re.test(command)) {
         process.stdout.write(
           JSON.stringify({

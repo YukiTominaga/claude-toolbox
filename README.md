@@ -69,7 +69,7 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
 
 | 構成要素 | crystal での実装 |
 |---|---|
-| automations(周期実行) | **組み込みに委譲**。`/loop 30m /crystal:loop next` または Routines から呼ぶ |
+| automations(周期実行) | 対話中は組み込みの `/loop 30m /crystal:loop next`。無人は cron / launchd から `scripts/loop-run.sh` |
 | worktrees(並列隔離) | **組み込みに委譲**。`LOOP.md` の契約から参照するだけ |
 | skills(プロジェクト知識) | `skills/` の 11 個 + `rules/` の自動注入 |
 | connectors(MCP) | **既存の接続に委譲**。`/crystal:loop refill` は GitHub MCP を使う |
@@ -83,11 +83,22 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
   `scripts/loop-next.sh` が先頭の未着手項目を 1 件だけ返す(枯渇時は exit 3)。
   追記は `scripts/loop-add.sh` が採番するので、行を手で書かない。
   GitHub Issues は `/crystal:loop refill` で backlog に取り込む
-- **予算**: `LOOP.md` の `max_runs_per_day` / `max_minutes_per_run`。
-  `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が台帳に記録する**
-  (消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
+- **予算と暴走の歯止め**: `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が
+  台帳に記録する**(消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
   状態を見るだけの `--check` は記録しない。
-  トークン課金額はシェルから観測できないため、回数と時間で代替している
+
+  | `LOOP.md` の設定 | 役割 |
+  |---|---|
+  | `max_runs_per_day` | 1 日に回してよい回数 |
+  | `max_minutes_per_run` | 1 イテレーションの壁時計時間(goal-gate が停止条件として効かせる) |
+  | `max_turns_per_run` | 暴走の歯止め。`loop-run.sh` が `--max-turns` として渡す |
+  | `max_cost_usd_per_day` | 実費の上限。**サブスクリプションでは空のままにする**(下記) |
+
+  **金額を歯止めにしない**。サブスクリプション(Max 等)では `total_cost_usd` はトークン数から
+  計算した参考値にすぎず追加課金も発生しないので、金額で止めても意味を持たない。
+  実費が本当に発生する API キー運用や CI に持っていくときだけ `max_cost_usd_per_day` を設定する。
+  **記録は常に続ける** — 1 イテレーションの重さを測る相対指標として使える
+  (実測で 1 回 $1.7〜$3.3 相当。決して軽くない)
 - **作業ブランチ**: `next` は項目ごとに `loop/<id>` ブランチを作って作業する。
   `main` のままだと `main` 直接コミット禁止と auto-commit の main スキップが重なり、
   **作業が一切コミットされない**ため
@@ -95,6 +106,23 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
   クラッシュやコンテキストのリセットを跨いで「何を回したか」が残る
 - **検証ラダー**: `rules/verification.md` に L1(決定的)〜 L5(人間)を定義。
   タスクが許す限り低いレベルに留め、検証者は生成者から独立させる
+
+### 記録先の使い分け
+
+ループが書き残すものは 4 つのストアに分かれている。**同じことを 2 か所に書かない**。
+迷ったら「それ単体で着手できるか」で判定する — できるなら仕事(backlog)か知見(learnings)、
+できないなら発見(signals)。
+
+| ストア | 答える問い | 書く | 読む | git |
+|---|---|---|---|---|
+| `docs/backlog.md` | 何を、どの順でやるか | `scripts/loop-add.sh` | `scripts/loop-next.sh`(機械) | ✓ |
+| `docs/signals/` | 何に気づいたか(未処理) | `scripts/signal-add.sh` | `/crystal:loop next`(キュー枯渇時)、`/crystal:learn` | ✓ |
+| `.claude/learnings.md` | 確定した再利用可能な知見 | `/crystal:learn` | 人・将来のセッション | ✓ |
+| `.claude/loop/run-log.jsonl` | 何を回したか(実行の事実) | `scripts/loop-guard.sh` / `scripts/loop-log.sh` | `/crystal:loop next` の冒頭(手順 0) | ✗ ローカル |
+
+signals と learnings は重複ではなく**ライフサイクルの段階が違う**。signal は「未処理の発見」、
+learnings は「処理を終えて再利用可能になった知見」で、signal が知見になったら本文を
+learnings に書き、その signal を `status: learned` にする。
 
 ### backlog と spec の使い分け
 
@@ -122,6 +150,30 @@ backlog の1行 ──(取り出す)──> spec(境界と AC-* を固める)
 
 `.claude/loop/` は `.gitignore` に追加すること(`/crystal:loop init` が提案する)。
 
+### 無人実行
+
+`scripts/loop-run.sh` が 1 イテレーションを無人で回す。`claude -p "/crystal:loop next"` を
+**新しいプロセスで**起動する。理由は 2 つある:
+
+- プラグインはキャッシュへの実コピーで、hooks はセッション開始時に固定される。
+  **同じセッション内でループの改修をドッグフーディングすることは原理的にできない**
+- cloud の Routines はローカルのリポジトリにも MCP にも触れない。ローカルリポジトリを
+  触るループの無人化は、cron / launchd + `claude -p` が現実的な形になる
+
+`CRYSTAL_UNATTENDED=1` が立ち、次の 2 つが変わる:
+
+- `pre-bash-guard` が `LOOP.md` のゲートに当たる操作(PR の作成・マージ、依存の追加、
+  force push)を `deny` する。**無人では承認を待てないので、ゲートは「聞く」ではなく
+  「やらない」として実装する**
+- キューが枯れても signal を backlog に勝手に昇格させない(仕事を自分で作らない)
+
+登録は人が行う(これ自体がゲート)。例:
+
+```bash
+# 平日 9 時に 1 イテレーション
+0 9 * * 1-5 cd /path/to/repo && CLAUDE_PROJECT_DIR=$(pwd) ./scripts/loop-run.sh >> .claude/loop/cron.log 2>&1
+```
+
 ## ゴール達成自動判定 (goal-gate)
 
 `/crystal:goal` で完了条件を `.claude/goal.md` に定義すると(`docs/spec/` に approved な
@@ -142,8 +194,13 @@ Haiku で達成判定し、未達なら差し戻す。
 
   無進捗のラウンドでは判定器を呼ばずに差し戻すため、止まっている間の課金も抑えられる。
   `started_epoch` / `last_sig` は hook が自動で埋めるので手動で編集しない
-- **fail-open**: claude CLI 不在・認証失敗・出力パース失敗時は判定をスキップして通す
-- 判定履歴は `~/.claude/logs/goal-gate.jsonl` に残る(/learn の素材)
+- **判定器の前に L1 検証**: 停止条件を抜けたあと、判定器 (L4) を呼ぶ前に
+  `scripts/project-checks.sh`(typecheck / lint / test)を**毎ラウンド無条件で**実行し、
+  赤なら判定器を呼ばずに差し戻す。検証ラダーの安い順に並べるため、かつ
+  `stop_hook_active` で素通しする stop-gate では内側ループの L1 が抜けるため
+- **fail-open**: claude CLI 不在・認証失敗・出力パース失敗時は判定をスキップして通す。
+  ただし L1 検証は `command -v claude` より手前にあるので、CLI が無くても効く
+- 判定履歴は `.claude/loop/judge-log.jsonl` に残る(/learn の素材、台帳と同じ場所)
 - `.claude/goal.md` は `.gitignore` に追加すること(untracked のままだと stop-gate の
   「変更なし判定」を汚染する)。`/crystal:goal` が追加を提案する
 
@@ -154,7 +211,11 @@ Haiku で達成判定し、未達なら差し戻す。
 
 - **動かない場面**(いずれも無条件でスキップ):
   `main` / `master` / detached HEAD、rebase・merge・cherry-pick・revert・bisect の途中、
-  git 管理下でない場合、変更が無い場合、差し戻しの往復中(`stop_hook_active`)
+  git 管理下でない場合、変更が無い場合
+- **差し戻しの往復中(`stop_hook_active`)もコミットする**。goal-gate が回す内側ループは
+  毎ラウンド差し戻すため、ここで素通しすると done 判定のラウンドまで含めて一度も
+  コミットされず、無人実行では成果がまるごと失われる。
+  ただし往復中はメッセージ生成の Haiku を呼ばず、定型メッセージにフォールバックする
 - **未追跡ファイルも含める**(`git add -A` 相当)。新規作成したファイルこそ取りこぼしやすいため。
   これは `rules/git-workflow.md` の一括 add 禁止に対する**明示的な例外**として同ファイルに記載している
 - **機密パスの検出で中止**: `.env` / `*.pem` / `*.key` / `id_rsa` / `credentials` / `.ssh/` /
@@ -175,9 +236,11 @@ Haiku で達成判定し、未達なら差し戻す。
 - `/crystal:learn` は 2 回以上再発した問題の eval ケース化を提案する
 - `crystal:verifier` は `evals/` があればランナーを実行し判定材料に含める
 
-本リポジトリ自身も `evals/cases/` を持つ(loop スクリプト・goal-gate の停止条件・
-スクリプトの構文・マニフェストの JSON 妥当性)。シナリオ本体は `evals/bin/loop-cases.sh` にあり、
-一時ディレクトリに最小プロジェクトを作って検証する。編集したら次を実行する:
+本リポジトリ自身も `evals/cases/` を持つ(loop スクリプト・hook の相互作用・
+スクリプトの構文・マニフェストの JSON 妥当性)。シナリオ本体は 2 つに分かれており、
+loop スクリプトは `evals/bin/loop-cases.sh`、hooks は `evals/bin/hook-cases.sh` にある。
+どちらも一時ディレクトリに最小プロジェクトを作り、`claude` と `npm` をスタブに
+差し替えて(課金せず決定的に)検証する。編集したら次を実行する:
 
 ```bash
 CLAUDE_PROJECT_DIR=$(pwd) ./scripts/eval-run.sh

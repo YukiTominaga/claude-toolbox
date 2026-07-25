@@ -24,3 +24,17 @@ Rules of thumb:
   insights belong in the built-in memory directory instead.
 - The `/learn` command runs a deliberate end-of-session retrospective; this rule
   covers capturing insights inline as they happen.
+
+## Findings That Are Not Yet Insights
+
+A **learning** is settled: you know what it means and what to do about it. A
+**finding** is not — friction you hit, an assumption that turned out broken, a
+gap you noticed while doing something else. Findings belong in `docs/signals/`
+(one file per finding, added via `scripts/signal-add.sh`), not here.
+
+The test: can someone act on it alone? If yes and it is work, it belongs in
+`docs/backlog.md`. If yes and it is knowledge, it belongs here. If no, it is a
+signal — someone has to promote it before it becomes work.
+
+Do not write the same thing to two stores. When a signal turns into a settled
+insight, write it here and mark the signal `status: learned`.

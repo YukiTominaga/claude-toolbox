@@ -2,7 +2,7 @@
 id: goal-gate-budget
 type: command
 description: 経過時間が max_minutes を超えたら stalled で止まる
-run: evals/bin/loop-cases.sh goal-budget
+run: evals/bin/hook-cases.sh goal-budget
 expect_exit: 0
 expect_output: ^OK:
 ---

@@ -23,16 +23,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/log-bash.sh\"",
-            "async": true
-          }
-        ]
-      },
-      {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
@@ -67,7 +57,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/goal-gate.sh\"",
-            "timeout": 180,
+            "timeout": 600,
             "statusMessage": "ゴール達成判定中..."
           }
         ]

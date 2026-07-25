@@ -16,6 +16,8 @@ spec:
 
 <!-- goal-gate hook が応答完了のたびにこの項目を Haiku で判定する。
      必ず検証可能な形(実行できるコマンド・観測できる挙動)で書くこと。
+     判定より手前で型・lint・テスト (L1) が毎ラウンド走り、赤なら判定器を呼ばずに
+     差し戻す。ここに「テストが通ること」を書く必要はない。
      frontmatter の意味:
        status:          active | done | stalled | abandoned (active 以外は判定しない)
        round:           hook が判定のたびにインクリメントする。手動で編集しない

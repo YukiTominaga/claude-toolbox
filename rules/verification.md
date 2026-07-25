@@ -42,9 +42,10 @@ Rules:
 
 | Mechanism | Level |
 |---|---|
-| `lint-changed` hook, `stop-gate` hook (typecheck / lint / test) | L1–L3 |
+| `lint-changed` hook | L2 |
+| `project-checks.sh` (typecheck / lint / test), run by `stop-gate` and by `goal-gate` on every round | L1–L3 |
 | `evals/cases/*.md` of `type: command` | L1–L2 |
-| `evals/cases/*.md` of `type: rubric`, `goal-gate` hook | L4 |
+| `evals/cases/*.md` of `type: rubric`, `goal-gate`'s judge | L4 |
 | `verifier` subagent (independent context, runs the commands itself) | reports L1–L4 |
 | Gates listed in a project's `LOOP.md` | L5 |
 
