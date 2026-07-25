@@ -30,7 +30,11 @@ verifier 自身が判定できず、いつまでも昇格しないか、根拠�
 - 触れてよい範囲:
   - `skills/` `agents/` `commands/` `rules/` `templates/` `scripts/` `hooks/` `evals/`
   - `README.md`
+  - `docs/`(`backlog.md` / `spec/` / `signals/`)。ループは毎イテレーション
+    ここに記帳する。範囲外にしておくと、手順どおり動くだけで契約違反になる
+  - `LOOP.md` の**本文**。契約の文言はループが直してよい
 - 触れてはいけない範囲:
+  - `LOOP.md` の frontmatter(本文と違い範囲外。下の「ゲート」を参照)
   - `.claude-plugin/marketplace.json`(ローカルマーケットプレイスの定義)
   - `.claude-plugin/plugin.json` の `version` 以外のフィールド
   - このリポジトリの外(`~/.claude/` 配下のユーザー環境、他リポジトリ)
@@ -85,6 +89,17 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 
 - Pull Request の作成・マージ
 - 依存関係の追加・更新、その他の破壊的な操作
+- この `LOOP.md` の frontmatter の変更。とりわけ `status` と予算の 3 項目
+  (`max_runs_per_day` / `max_minutes_per_run` / `max_turns_per_run`)。
+  自分で緩められる歯止めは歯止めではない。`status: paused` を自分で `active` に
+  戻せるなら停止は効かず、`max_runs_per_day` を自分で増やせるなら日次上限は上限でない。
+  値を変えるべき根拠を見つけたら、**変えずに報告する**(`docs/backlog.md` に積むか
+  signal を 1 件残す)
+
+このうち **frontmatter の変更だけは機械的に強制されない**。`hooks/pre-bash-guard.sh` が
+無人実行で deny するのは Bash コマンドであり、Edit / Write によるファイル変更は見ていない。
+上の 2 つは該当コマンドが deny されるが、frontmatter は書けてしまう。ここは規律で守る箇所で、
+破れば git 履歴に残る。
 
 `git push` は**ゲートにしない**。feature branch への追記に限りループが自分で行ってよい
 (force push と履歴操作は「2. 作業範囲」で禁止済み)。理由:
