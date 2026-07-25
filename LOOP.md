@@ -71,6 +71,22 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 (無ければ追加する)。eval が落ちないことだけでなく、**壊したときに落ちること**を
 確認する(ミューテーションテスト)。
 
+**ミューテーションは使い捨ての worktree の中で行う。作業ツリーの追跡ファイルを
+壊れた実装で上書きしてはいけない。** auto-commit はターン終了時に作業ツリーの全変更を
+拾うため、復帰し忘れがそのままコミットされる。しかもメッセージは変更内容から生成されるので、
+巻き戻しに「簡略化」のようなもっともらしい理由が付いて、履歴上は意図された変更に見える。
+Q-19 で実際に起きた(`bbd2e79` が実装を全面的に巻き戻し、気づいたのは L1 が赤を出したときだけ)。
+
+```
+git worktree add /path/outside/repo/mut <対象コミット>
+git show <壊す前のコミット>:<対象ファイル> >/path/outside/repo/mut/<対象ファイル>
+cd /path/outside/repo/mut && CLAUDE_PROJECT_DIR=$(pwd) ./scripts/eval-run.sh <ケース>...
+git worktree remove --force /path/outside/repo/mut
+```
+
+worktree は**リポジトリの外**に置く。中に置くと作業ツリーの未追跡ファイルになり、
+結局 auto-commit に拾われる。
+
 ## 5. 停止条件 (stop rules)
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
