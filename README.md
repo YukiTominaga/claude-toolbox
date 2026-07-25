@@ -148,7 +148,7 @@ Haiku で達成判定し、未達なら差し戻す。
   `stop_hook_active` で素通しする stop-gate では内側ループの L1 が抜けるため
 - **fail-open**: claude CLI 不在・認証失敗・出力パース失敗時は判定をスキップして通す。
   ただし L1 検証は `command -v claude` より手前にあるので、CLI が無くても効く
-- 判定履歴は `~/.claude/logs/goal-gate.jsonl` に残る(/learn の素材)
+- 判定履歴は `.claude/loop/judge-log.jsonl` に残る(/learn の素材、台帳と同じ場所)
 - `.claude/goal.md` は `.gitignore` に追加すること(untracked のままだと stop-gate の
   「変更なし判定」を汚染する)。`/crystal:goal` が追加を提案する
 

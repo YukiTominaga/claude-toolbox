@@ -27,8 +27,10 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 GOAL=".claude/goal.md"
 [ -f "$GOAL" ] || exit 0
 
-LOG_DIR="$HOME/.claude/logs"
-LOG="$LOG_DIR/goal-gate.jsonl"
+# 判定履歴はプロジェクト内の台帳と同じ場所に置く。$HOME 配下に置くと全プロジェクトの
+# 履歴が 1 ファイルに混ざり、eval スイートの warn 行まで実プロジェクトに混入する。
+LOG_DIR=".claude/loop"
+LOG="$LOG_DIR/judge-log.jsonl"
 mkdir -p "$LOG_DIR" 2>/dev/null
 
 warn() {
@@ -124,11 +126,18 @@ esac
 # auto-commit フックや「feature ブランチでは自由にコミット」の運用により、ターン終了時の
 # 作業ツリーは空であることが普通になる。作業ツリーだけを見ると、コミットを積み続けていても
 # 毎ラウンド同一の署名になり、前進を停滞と誤判定して止まる。
+#
+# 逆に `.claude/loop/` と `.claude/goal.md` は署名から**除外する**。台帳・判定履歴・
+# ゴール自身はループの記帳であってエージェントの作業ではない。含めると毎ラウンド署名が
+# 変わり、完全に停滞していても「前進している」と誤認して止まらなくなる(= 停止条件 4 が死ぬ)。
+# .gitignore に頼らず署名側で除外する: gitignore していないプロジェクトで静かに壊れるため。
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  own=":(exclude).claude/loop"
+  own_goal=":(exclude).claude/goal.md"
   sig=$( {
     git rev-parse HEAD
-    git diff HEAD
-    git status --porcelain
+    git diff HEAD -- . "$own" "$own_goal"
+    git status --porcelain -- . "$own" "$own_goal"
   } 2>/dev/null | cksum | tr -d ' ')
   last_sig=$(get_field last_sig)
   no_progress=$(get_field no_progress)
@@ -164,7 +173,10 @@ fi
 #   - claude の有無を見るより「前」: CLI が無い環境でも L1 だけは残る
 #     (goal-l1-blocks-without-claude)
 CHECKS="$ROOT/scripts/project-checks.sh"
-if [ -x "$CHECKS" ] && ! l1_failed=$("$CHECKS" 2>&1); then
+if [ ! -x "$CHECKS" ]; then
+  # 静かに L1 が消える唯一の経路。素通しはするが痕跡は残す
+  warn "project-checks.sh が実行可能でないため L1 検証をスキップ ($CHECKS)"
+elif ! l1_failed=$("$CHECKS" 2>&1); then
   printf 'L1 検証に失敗しました (ラウンド %s/%s)。完了判定は行いません。\n%s\n修正してから完了と報告すること。\n' \
     "$round" "$max_rounds" "$l1_failed" >&2
   exit 2

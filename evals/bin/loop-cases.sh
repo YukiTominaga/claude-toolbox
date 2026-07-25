@@ -27,6 +27,7 @@ next() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-next.sh" "$@"; }
 add() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-add.sh" "$@" 2>/dev/null; }
 guard() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" "$@"; }
 loglog() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" "$@"; }
+signal() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/signal-add.sh" "$@" 2>/dev/null; }
 
 write_queue() {
   mkdir -p "$WORK/docs"
@@ -147,6 +148,30 @@ max_runs_per_day: 8
 EOF
   guard >/dev/null 2>&1 && ng "paused でも実行が許可された"
   ok "paused では実行しない"
+  ;;
+
+# signals: 採番が連番になり、frontmatter が揃う
+signal-add-numbering)
+  signal "最初の気づき" >/dev/null 2>&1
+  [ "$?" -eq 3 ] || ng "docs/signals/ が無いときの exit が 3 でない"
+
+  mkdir -p "$WORK/docs/signals"
+  [ "$(signal "最初の気づき" "Q-1" "本文")" = "S-1" ] || ng "空のときに S-1 にならない"
+  [ "$(signal "2件目" "" "本文")" = "S-2" ] || ng "連番が S-2 にならない"
+  [ -f "$WORK/docs/signals/S-2.md" ] || ng "ファイル名が S-<n>.md でない"
+
+  # README.md が採番に混ざってはいけない
+  [ "$(signal "3件目")" = "S-3" ] || ng "README.md を数えてしまっている"
+
+  for k in id created source status; do
+    grep -qE "^$k:" "$WORK/docs/signals/S-1.md" || ng "frontmatter に $k が無い"
+  done
+  grep -qE '^status: open$' "$WORK/docs/signals/S-1.md" || ng "初期 status が open でない"
+  grep -qE '^# 最初の気づき$' "$WORK/docs/signals/S-1.md" || ng "タイトルが見出しになっていない"
+
+  signal "" >/dev/null 2>&1
+  [ "$?" -eq 1 ] || ng "空タイトルを受け付けた"
+  ok "signals の採番・書式・エラー処理が期待どおり"
   ;;
 
 # 台帳: 想定外の result を受け付けない

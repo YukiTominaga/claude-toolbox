@@ -60,6 +60,17 @@ if [ -n "$secret" ]; then
 fi
 
 git add -A -- . >/dev/null 2>&1 || exit 0
+
+# ループ自身の記帳 (.claude/loop/ の台帳と判定履歴、.claude/goal.md) はコミットしない。
+# エージェントの作業ではないうえ、これをコミットすると HEAD が毎ラウンド動き、
+# goal-gate の無進捗検知が「前進している」と誤認して停止条件 4 が死ぬ。
+# .gitignore に頼らずここで外す(gitignore していないプロジェクトで静かに壊れるため)。
+#
+# add の pathspec に `:(exclude)` を書く方法は使えない: 対象が .gitignore 済みだと
+# git add が「The following paths are ignored」で exit 1 になり、|| exit 0 で
+# **何もコミットしなくなる**。reset なら ignore 済み・未 staged のどちらでも安全に no-op。
+git reset -q -- .claude/loop .claude/goal.md >/dev/null 2>&1 || true
+
 if git diff --cached --quiet 2>/dev/null; then
   exit 0
 fi

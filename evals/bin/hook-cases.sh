@@ -299,11 +299,9 @@ goal-l1-after-stop-rules)
   [ "$(goal_field status)" = "stalled" ] || ng "(b) stalled になっていない"
   [ "$(calls_count)" -eq 0 ] || ng "(b) 停止条件より前に L1 を実行した"
 
-  # (c) 無進捗
+  # (c) 無進捗。1 回目で hook 自身に last_sig を打たせ、何も変えずに 2 回目で上限に触れさせる
   write_goal 1 "$(date +%s)" 60
-  sig=$(cd "$WORK" && { git rev-parse HEAD; git diff HEAD; git status --porcelain; } 2>/dev/null |
-    cksum | tr -d ' ')
-  sed -i.bak "s/^last_sig:.*/last_sig: $sig/" "$WORK/.claude/goal.md" && rm -f "$WORK/.claude/goal.md.bak"
+  goalgate >/dev/null 2>&1
   reset_calls
   goalgate >/dev/null 2>&1 || ng "(c) 無進捗の上限で exit が 0 でない"
   [ "$(goal_field status)" = "stalled" ] || ng "(c) stalled になっていない"
@@ -419,13 +417,39 @@ goal-budget)
 goal-no-progress)
   init_git
   write_goal 1 "$(date +%s)" 60
-  sig=$(cd "$WORK" && { git rev-parse HEAD; git diff HEAD; git status --porcelain; } 2>/dev/null |
-    cksum | tr -d ' ')
-  sed -i.bak "s/^last_sig:.*/last_sig: $sig/" "$WORK/.claude/goal.md" && rm -f "$WORK/.claude/goal.md.bak"
+  # 署名をテスト側で再計算しない(実装と二重管理になる)。
+  # 1 回目で hook 自身に last_sig を打たせ、何も変えずに 2 回目を回す。
+  goalgate >/dev/null 2>&1 || ng "1 回目の exit が 0 でない"
+  [ "$(goal_field status)" = "active" ] || ng "1 回目で止まってしまった"
   goalgate >/dev/null 2>&1
   [ "$?" -eq 0 ] || ng "無進捗の上限到達時の exit が 0 でない"
   [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
   ok "無進捗の継続で stalled になる"
+  ;;
+
+# 停止条件 4: ループ自身の記帳 (.claude/loop/) は「前進」に数えない
+# 判定履歴や台帳を署名に含めると、完全に停滞していても毎ラウンド署名が変わり、
+# 停止条件 4 が丸ごと死ぬ。判定履歴をプロジェクト内に移したときに実際に踏んだ回帰。
+goal-no-progress-ignores-ledger)
+  init_git
+  git -C "$WORK" checkout -q -b feature/loop
+  write_goal 2 "$(date +%s)" 600
+  # 台帳を追跡対象にする = 最も壊れやすい構成 (.gitignore していないプロジェクト)
+  mkdir -p "$WORK/.claude/loop"
+  echo '{"ts":"x","event":"start"}' >"$WORK/.claude/loop/run-log.jsonl"
+  git -C "$WORK" add -A
+  git -C "$WORK" commit -qm ledger
+
+  # 何もしないターンを繰り返す。goal-gate 自身が毎ラウンド判定履歴を書く
+  for _ in 1 2 3 4; do
+    goalgate >/dev/null 2>&1
+    [ "$(goal_field status)" = "stalled" ] && break
+  done
+  [ "$(goal_field status)" = "stalled" ] ||
+    ng "ループ自身の記帳を前進と誤認して止まらない (round=$(goal_field round), no_progress=$(goal_field no_progress))"
+  # 記帳が実際に発生していたことの確認 (していなければテストが無意味)
+  [ -s "$WORK/.claude/loop/judge-log.jsonl" ] || ng "判定履歴が書かれていない (前提が崩れている)"
+  ok "ループ自身の記帳は前進に数えない"
   ;;
 
 # 旧形式(新フィールドを持たない)の goal.md でも動き、フィールドが補われる
@@ -555,6 +579,41 @@ auto-commit-skip)
   [ "$(commit_count)" -eq "$before" ] || ng "マージ途中にコミットした"
 
   ok "main / 無変更 / マージ途中では動かない"
+  ;;
+
+# 自動コミット: ループ自身の記帳はコミットしないが、作業は必ずコミットする
+auto-commit-ignores-ledger)
+  init_git
+  git -C "$WORK" checkout -q -b feature/loop
+  mkdir -p "$WORK/.claude/loop"
+
+  # (1) 記帳が追跡されている構成 (.gitignore していないプロジェクト)
+  echo '{"ts":"x"}' >"$WORK/.claude/loop/run-log.jsonl"
+  echo w1 >"$WORK/feature.txt"
+  git -C "$WORK" add -A && git -C "$WORK" commit -qm base
+  before=$(commit_count)
+  echo '{"ts":"y"}' >>"$WORK/.claude/loop/run-log.jsonl"
+  echo w2 >>"$WORK/feature.txt"
+  autocommit >/dev/null || ng "(1) exit が 0 でない"
+  [ "$(commit_count)" -eq "$((before + 1))" ] || ng "(1) 作業がコミットされていない"
+  git -C "$WORK" show --name-only --oneline HEAD | grep -q 'feature.txt' || ng "(1) 作業が含まれていない"
+  git -C "$WORK" show --name-only --oneline HEAD | grep -q 'run-log' && ng "(1) 台帳をコミットした"
+
+  # (2) 記帳が .gitignore されている構成 (推奨構成)。
+  # add の pathspec に :(exclude) を書くと git add が exit 1 になり、
+  # || exit 0 で**何もコミットしなくなる**。その退行をここで捕まえる。
+  printf '.claude/goal.md\n.claude/loop/\n' >"$WORK/.gitignore"
+  git -C "$WORK" rm -r -q --cached .claude/loop >/dev/null 2>&1
+  echo dummy >"$WORK/.claude/goal.md"
+  git -C "$WORK" add -A && git -C "$WORK" commit -qm ignore-ledger
+  before=$(commit_count)
+  echo '{"ts":"z"}' >>"$WORK/.claude/loop/run-log.jsonl"
+  echo w3 >>"$WORK/feature.txt"
+  autocommit >/dev/null || ng "(2) exit が 0 でない"
+  [ "$(commit_count)" -eq "$((before + 1))" ] ||
+    ng "(2) 記帳が gitignore 済みだと何もコミットしなくなる (git add が pathspec で失敗)"
+
+  ok "記帳は除外しつつ作業は必ずコミットする"
   ;;
 
 # 自動コミット: 機密の可能性があるパスは中止して知らせる
