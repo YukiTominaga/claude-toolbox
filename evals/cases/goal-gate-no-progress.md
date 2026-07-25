@@ -2,7 +2,7 @@
 id: goal-gate-no-progress
 type: command
 description: 差分が変わらないラウンドが続いたら stalled で止まる
-run: evals/bin/loop-cases.sh goal-no-progress
+run: evals/bin/hook-cases.sh goal-no-progress
 expect_exit: 0
 expect_output: ^OK:
 ---

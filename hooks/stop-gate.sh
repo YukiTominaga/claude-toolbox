@@ -1,8 +1,15 @@
 #!/bin/bash
 # stop-gate.sh — 完了宣言時の検証ゲート
-# Claude が応答を終えようとしたとき、リポジトリに変更があれば
-# テスト・型チェック・lint を実行し、失敗していれば exit 2 で差し戻す。
+# Claude が応答を終えようとしたとき、リポジトリに変更があれば L1 検証を実行し、
+# 失敗していれば exit 2 で差し戻す。検証の中身は scripts/project-checks.sh にある。
+#
+# ゴール(.claude/goal.md)が動いているセッションでは goal-gate が毎ラウンド同じ検証を行うが、
+# **このフックは goal.md を読まない**。双方が同じファイルを別々に解釈してズレると
+# 「どちらも検証しない」に倒れるため。読まなければ最悪でも「二重実行(無駄)」に倒れる。
 set -u
+
+# --- プラグインルートの解決は cd より前に行う ---
+ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 input=$(cat)
 
@@ -23,32 +30,11 @@ if git diff --quiet HEAD 2>/dev/null \
   exit 0
 fi
 
-FAILED=""
-run_check() {
-  local name="$1"; shift
-  local out
-  if ! out=$("$@" 2>&1); then
-    FAILED="${FAILED}\n--- ${name} 失敗 ---\n$(printf '%s' "$out" | tail -n 40)"
-  fi
-}
+CHECKS="$ROOT/scripts/project-checks.sh"
+[ -x "$CHECKS" ] || exit 0
 
-# --- Node / TypeScript プロジェクト ---
-if [ -f package.json ]; then
-  jq -e '.scripts.typecheck' package.json >/dev/null 2>&1 && run_check "typecheck" npm run -s typecheck
-  jq -e '.scripts.lint'      package.json >/dev/null 2>&1 && run_check "lint"      npm run -s lint
-  jq -e '.scripts.test'      package.json >/dev/null 2>&1 && run_check "test"      npm test -- --silent
-fi
-
-# --- Python プロジェクト ---
-if [ -f pyproject.toml ] || [ -f setup.py ]; then
-  command -v ruff >/dev/null 2>&1 && run_check "ruff" ruff check .
-  if command -v pytest >/dev/null 2>&1 && { [ -d tests ] || [ -d test ]; }; then
-    run_check "pytest" pytest -q
-  fi
-fi
-
-if [ -n "$FAILED" ]; then
-  printf '検証ゲート失敗。以下のエラーを修正するまで完了と報告しないこと。修正後は実際のコマンド出力を根拠として提示すること。%b\n' "$FAILED" >&2
+if ! failed=$("$CHECKS" 2>&1); then
+  printf '検証ゲート失敗。以下のエラーを修正するまで完了と報告しないこと。修正後は実際のコマンド出力を根拠として提示すること。\n%s\n' "$failed" >&2
   exit 2
 fi
 

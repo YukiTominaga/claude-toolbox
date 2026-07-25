@@ -2,7 +2,7 @@
 id: goal-gate-with-auto-commit
 type: command
 description: goal-gate と auto-commit を同じターンで動かしても前進を停滞と誤判定しない
-run: evals/bin/loop-cases.sh goal-gate-with-auto-commit
+run: evals/bin/hook-cases.sh goal-gate-with-auto-commit
 expect_exit: 0
 expect_output: ^OK:
 ---
@@ -18,7 +18,8 @@ Stop 時点の作業ツリーが常に空になり、コミットを積み続け
 
 したがってこのケースの本質は「HEAD を署名に含めること」ではなく、
 **hook 同士の組み合わせを通しで動かして検証すること**にある。
-新しい Stop hook を足すときは、このシナリオにターンを足して確認すること。
+新しい Stop hook を足すときは、このシナリオと `inner-loop-l1` の両方に
+ターンを足して確認すること(こちらは誤 stall、あちらは L1 の床を見ている)。
 
 検証しているターンの型は 3 つ:
 

@@ -2,7 +2,7 @@
 id: shell-syntax
 type: command
 description: hooks / scripts / evals の全スクリプトが構文エラーを含まない
-run: for f in hooks/*.sh scripts/*.sh evals/bin/*.sh; do case "$(head -n1 "$f")" in *node*) node --check <"$f" || exit 1 ;; *) bash -n "$f" || exit 1 ;; esac; done
+run: for f in hooks/*.sh scripts/*.sh evals/bin/*.sh .claude/checks.sh; do case "$(head -n1 "$f")" in *node*) node --check <"$f" || exit 1 ;; *) bash -n "$f" || exit 1 ;; esac; done
 expect_exit: 0
 ---
 ## メモ

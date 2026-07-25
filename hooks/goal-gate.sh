@@ -17,6 +17,9 @@ if [ "${CRYSTAL_GOAL_JUDGE:-}" = "1" ]; then
   exit 0
 fi
 
+# --- プラグインルートの解決は cd より前に行う ---
+ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
 input=$(cat)
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
@@ -153,6 +156,20 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fi
 fi
 
+# --- L1 検証 (停止条件の後、判定器の前) ---
+# 検証ラダーの安い順に並べる。赤なら judge を呼ばずに差し戻す(コストも下がる)。
+# 位置は 2 つの制約で決まっており、どちらも eval で固定している:
+#   - 停止条件 4 層より「後」: 前に置くと赤の間ずっと exit 2 でラウンド上限に到達せず、
+#     このフック自身が無限ループになる (goal-l1-after-stop-rules)
+#   - claude の有無を見るより「前」: CLI が無い環境でも L1 だけは残る
+#     (goal-l1-blocks-without-claude)
+CHECKS="$ROOT/scripts/project-checks.sh"
+if [ -x "$CHECKS" ] && ! l1_failed=$("$CHECKS" 2>&1); then
+  printf 'L1 検証に失敗しました (ラウンド %s/%s)。完了判定は行いません。\n%s\n修正してから完了と報告すること。\n' \
+    "$round" "$max_rounds" "$l1_failed" >&2
+  exit 2
+fi
+
 # --- 判定材料の収集 ---
 command -v claude >/dev/null 2>&1 || {
   warn "claude CLI が見つからないため判定をスキップ"
@@ -185,8 +202,19 @@ ${context}
 ## git status --short
 ${gitinfo}"
 
+# macOS には timeout が無い(GNU coreutils 同梱)。素のまま呼ぶと 127 で必ず失敗し、
+# 判定が毎回 fail-open して L4 が丸ごと死ぬ。あれば使い、無ければ付けずに実行する
+# (ぶら下がった場合は hooks.json の timeout がバックストップになる)。
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT="timeout 120"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT="gtimeout 120"
+else
+  TIMEOUT=""
+fi
+
 # --- Haiku による判定 (再帰防止は disableAllHooks + env ガードの二重化) ---
-result=$(printf '%s' "$prompt" | CRYSTAL_GOAL_JUDGE=1 timeout 120 \
+result=$(printf '%s' "$prompt" | CRYSTAL_GOAL_JUDGE=1 $TIMEOUT \
   claude -p --model claude-haiku-4-5-20251001 \
   --settings '{"disableAllHooks": true}' 2>>"$LOG") || {
   warn "judge 実行失敗 (round=$round)"

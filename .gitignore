@@ -1,3 +1,7 @@
 .DS_Store
 .claude/goal.md
 .claude/loop/
+# セッションごとの一時的な allow ルール。絶対パスを含み共有できない。
+# auto-commit は git add -A 相当で未追跡ファイルも取り込むため、明示的に除外する
+# (機密パス検出の正規表現はこのファイルを拾わない)。
+.claude/settings.local.json

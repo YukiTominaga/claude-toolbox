@@ -67,7 +67,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/goal-gate.sh\"",
-            "timeout": 180,
+            "timeout": 600,
             "statusMessage": "ゴール達成判定中..."
           }
         ]

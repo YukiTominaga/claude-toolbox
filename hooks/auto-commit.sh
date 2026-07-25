@@ -6,8 +6,10 @@
 #   git 管理下でない場合、変更が無い場合
 # 機密の可能性があるパスが対象に含まれるときはコミットせず systemMessage で知らせる。
 #
-# stop-gate.sh と同様 stop_hook_active では素通しする: 差し戻しの往復ごとに
-# コミットを刻まず、ターンが素直に終わったときだけ 1 コミットにする。
+# 差し戻しの往復中(stop_hook_active)でもコミットする。goal-gate は内側ループを回すあいだ
+# 毎ラウンド差し戻すため、ここで素通しすると done 判定のラウンドまで含めて一度も
+# コミットされず、無人実行では成果がまるごと失われる。
+# ただし往復中はメッセージ生成の Haiku を呼ばない(往復ごとの課金を避ける)。
 #
 # 注意: このフックは git add -A 相当で未追跡ファイルも取り込む。これは
 # rules/git-workflow.md の一括 add 禁止に対する明示的な例外であり、
@@ -21,9 +23,8 @@ fi
 
 input=$(cat)
 
-if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
-  exit 0
-fi
+# 差し戻しの往復中か。コミットはするが、メッセージ生成は定型にフォールバックする
+pushback=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
@@ -65,7 +66,7 @@ fi
 
 # --- コミットメッセージ: Haiku で差分から生成し、失敗したら定型にフォールバック ---
 msg=""
-if command -v claude >/dev/null 2>&1; then
+if [ "$pushback" != "true" ] && command -v claude >/dev/null 2>&1; then
   prompt="以下の差分に対するコミットメッセージを1行だけ出力してください。
 Conventional Commits 形式 (feat: / fix: / docs: / chore: / refactor: / test:)、日本語、72文字以内。
 説明・コードフェンス・引用符は一切付けないこと。
@@ -76,7 +77,16 @@ $(git diff --cached --stat | tail -n 20)
 ## 差分 (先頭のみ)
 $(git diff --cached | head -c 4000)"
 
-  msg=$(printf '%s' "$prompt" | CRYSTAL_AUTOCOMMIT=1 timeout 60 \
+  # macOS には timeout が無い(GNU coreutils 同梱)。素のまま呼ぶと 127 で必ず失敗し、
+  # 生成メッセージが使われず常に定型にフォールバックする。あれば使う。
+  if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT="timeout 60"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT="gtimeout 60"
+  else
+    TIMEOUT=""
+  fi
+  msg=$(printf '%s' "$prompt" | CRYSTAL_AUTOCOMMIT=1 $TIMEOUT \
     claude -p --model claude-haiku-4-5-20251001 \
     --settings '{"disableAllHooks": true}' 2>/dev/null |
     head -n 1 | sed -E 's/^[[:space:]]*[`"'"'"']*//; s/[`"'"'"']*[[:space:]]*$//' | cut -c1-120)
