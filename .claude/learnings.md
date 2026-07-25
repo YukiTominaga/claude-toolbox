@@ -36,3 +36,12 @@ auto-commit を足すと「作業ツリーを覗く仕組み」がすべて壊�
 後続の Stop hook は走る。`stop_hook_active` は初回 false、差し戻し後は true に固定。
 この 2 つは公式ドキュメントに無く、hook を偽の入力で起動する eval では検知できない。
 `scripts/loop-smoke.sh` がこの契約を実 Claude Code 経由で確かめる。
+
+## 2026-07-25: 現行の Claude Code に MultiEdit ツールは無い
+
+hooks.json の matcher に書いたツール名が実在しなくても**エラーにならず、黙って
+一度も発火しない**。2.1.212 で確認したところ MultiEdit はセッションで使えるツールに
+存在せず、ファイル編集は Edit / Write / NotebookEdit に集約されている。
+`hooks/hooks.json:26` の `"Write|Edit|MultiEdit"` は死んだ名前を含んだまま動いていた
+(Write と Edit で発火するので気づけない)。matcher に足すツール名は、その版の
+セッションで実際に使えるかを確かめてから書くこと。綴り間違いも同じ壊れ方をする。
