@@ -46,9 +46,23 @@ JUDGE_LOG=".claude/loop/judge-log.jsonl"
 out=$(mktemp) || exit 1
 trap 'rm -f "$out"' EXIT
 
-# 実行前の判定回数を控える。内側ループが本当に回ったかを後で照合する
-judge_before=$(wc -l <"$JUDGE_LOG" 2>/dev/null | tr -d ' ')
+# 実行前の判定回数を控える。内側ループが本当に回ったかを後で照合する。
+# リダイレクト失敗のメッセージは `<file 2>/dev/null` では消えない(順序の都合)ので存在を先に見る
+judge_before=0
+[ -f "$JUDGE_LOG" ] && judge_before=$(wc -l <"$JUDGE_LOG" | tr -d ' ')
 case "$judge_before" in '' | *[!0-9]*) judge_before=0 ;; esac
+
+# 実行前にキュー先頭の id と、台帳の最新の結果行を控える。
+# 中断されたイテレーションが台帳に何も残さないと、次の周回が「何が起きたか」を読めない。
+head_id=$("$ROOT/scripts/loop-next.sh" 2>/dev/null | jq -r '.id // empty' 2>/dev/null)
+result_before=$("$ROOT/scripts/loop-log.sh" --recent 1 2>/dev/null | jq -r '.ts // empty' 2>/dev/null)
+
+# 台帳に新しい結果行が積まれたか(= エージェントが自分で記録したか)
+recorded_result() {
+  local now
+  now=$("$ROOT/scripts/loop-log.sh" --recent 1 2>/dev/null | jq -r '.ts // empty' 2>/dev/null)
+  [ -n "$now" ] && [ "$now" != "$result_before" ]
+}
 
 # CRYSTAL_UNATTENDED=1 は 2 つの意味を持つ:
 #   pre-bash-guard がゲート該当コマンド (PR 作成・マージ・依存追加) を deny する
@@ -78,6 +92,14 @@ jq -nc --arg ts "$(date -Iseconds)" --argjson c "$cost" --arg s "$subtype" \
   '{ts: $ts, event: "cost", cost_usd: $c, subtype: $s}' >>"$LEDGER" 2>/dev/null
 
 if [ "$status" -ne 0 ] || [ "$subtype" != "success" ]; then
+  # 途中で打ち切られたイテレーションを台帳に残す。予算上限やクラッシュで中断されると
+  # エージェントは手順 7 まで到達できず、台帳には cost 行しか残らない。
+  # それだと次の周回が手順 0 で「前回 Q-7 が途中で切れた」ことを読めない。
+  if [ -n "$head_id" ] && ! recorded_result; then
+    "$ROOT/scripts/loop-log.sh" "$head_id" failed 0 \
+      "実行が中断 (subtype=$subtype, cost=\$$cost)。作業が中途の可能性があるので差分を確認すること" \
+      >/dev/null 2>&1
+  fi
   echo "loop-run: 実行が正常終了しませんでした (subtype=$subtype, cost=\$$cost)" >&2
   exit 1
 fi

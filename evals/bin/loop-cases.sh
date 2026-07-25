@@ -31,13 +31,19 @@ signal() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/signal-add.sh" "$@" 2>/dev/
 run() { CLAUDE_PROJECT_DIR="$WORK" CRYSTAL_LOOP_CMD="$WORK/bin/loopcmd" "$ROOT/scripts/loop-run.sh"; }
 
 # 無人ループの中身 (claude -p) を差し替えるスタブ。
-# $1 = judged | unjudged  判定器を通したかどうかを模す
+# $1 = judged    判定器を通して正常終了する
+#      unjudged  done と記録するが判定器を通さない (自己採点だけ)
+#      aborted   予算上限などで打ち切られる (記帳まで到達しない)
 stub_loop_cmd() {
   mkdir -p "$WORK/bin" "$WORK/.claude/loop"
   cat >"$WORK/bin/loopcmd" <<EOF
 #!/bin/bash
 # エージェントが 1 イテレーションを終えた状態を作る
 CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" >/dev/null 2>&1
+if [ "$1" = "aborted" ]; then
+  printf '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":3.31}'
+  exit 0
+fi
 CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" Q-1 done 1 "スタブ" >/dev/null 2>&1
 if [ "$1" = "judged" ]; then
   echo '{"round":1,"met":true}' >>"$WORK/.claude/loop/judge-log.jsonl"
@@ -246,6 +252,36 @@ EOF
     ng "台帳に failed が残っていない: $last"
   [ "$(printf '%s' "$last" | jq -r .item_id)" = "Q-1" ] || ng "item_id が引き継がれていない"
   ok "判定器を通らなかったイテレーションを検出して failed に落とす"
+  ;;
+
+# 無人実行: 途中で打ち切られたイテレーションを台帳に残す
+run-records-abort)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 30
+---
+EOF
+  write_queue <<'EOF'
+# バックログ
+- [ ] Q-1: 何かやる
+EOF
+  stub_loop_cmd aborted
+  out=$(run 2>&1) && ng "打ち切られたのに成功として扱った"
+  printf '%s' "$out" | grep -q 'error_max_budget_usd' || ng "理由が報告されていない: $out"
+
+  # エージェントは手順 7 まで到達できないので、loop-run.sh が代わりに記録する
+  last=$(loglog --recent 1)
+  [ -n "$last" ] || ng "台帳に何も残っていない (次の周回が状況を読めない)"
+  [ "$(printf '%s' "$last" | jq -r .result)" = "failed" ] || ng "failed で記録されていない: $last"
+  [ "$(printf '%s' "$last" | jq -r .item_id)" = "Q-1" ] || ng "キュー先頭の id が記録されていない"
+  printf '%s' "$last" | jq -r .notes | grep -q '中断' || ng "中断であることがメモに無い"
+
+  # 実費は打ち切られた分も記録する (しないと失敗を繰り返すループが無限に課金できる)
+  grep '"event":"cost"' "$WORK/.claude/loop/run-log.jsonl" | jq -e '.cost_usd == 3.31' >/dev/null ||
+    ng "打ち切られた実行のコストが記録されていない"
+  ok "打ち切られたイテレーションを台帳に残す"
   ;;
 
 # 予算ゲート: paused の間は動かない
