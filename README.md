@@ -10,7 +10,7 @@
 | `agents/` | `spec-critic`, `verifier` |
 | `commands/` | `/learn`, `/spec`, `/goal`, `/eval`, `/loop` |
 | `hooks/` | `hooks.json` + スクリプト 8 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / session-rules / audit-config) |
-| `scripts/` | 手動実行系スクリプト(`eval-run.sh`, `loop-next.sh`, `loop-guard.sh`, `loop-log.sh`) |
+| `scripts/` | 手動実行系スクリプト(`eval-run.sh`, `loop-add.sh`, `loop-next.sh`, `loop-guard.sh`, `loop-log.sh`) |
 | `rules/` | コーディング規約・テスト方針・検証ラダーなど(SessionStart hook `session-rules.sh` が全セッションに自動注入) |
 | `templates/` | spec / lessons / goal / eval-case / loop / backlog テンプレート |
 | `evals/` | このリポジトリ自身の eval ケース(`scripts/eval-run.sh` で実行) |
@@ -38,9 +38,34 @@ claude plugin install crystal@yuki-local --scope user
 crystal はループを **外側**(仕事を見つけて渡す)と **内側**(完了まで反復する)に分けている。
 
 ```
+入口 (/crystal:loop add)   やりたいこと → 分解 or 仕様化 → 承認 → キューに積む
 外側 (/crystal:loop next)  discover → 仕様 → ゴール定義 → [内側] → 独立検証 → 台帳 → 次へ
 内側 (goal-gate hook)                          実装 ⇄ 達成判定 を完了条件を満たすまで反復
 ```
+
+### 作業の入口
+
+**やりたいことは `/crystal:loop add` に渡す。これが唯一の入口**。1 件だけ今すぐやる場合も
+キューを経由させる(入口を分けると、やった仕事が台帳に残らない穴ができるため)。
+`add` は積んだあと「続けて `next` を回すか」を確認するので、そのまま実装まで進める。
+
+```bash
+/crystal:loop add 認証まわりを Identity Platform に寄せたい。現状 NextAuth で
+握っているセッションを Firebase Admin SDK のセッションクッキーに置き換える。
+requireRole は残す。Cloud Run の ADC 設定も含めて。
+```
+
+入力が「やりたいことの記述」なら**単独で完了判定できる粒度**に分解して N 行を積み、
+「手段まで書かれた計画」なら**行に刻まず `docs/spec/` に変換して 1 行だけ**積む。
+この振り分けはコマンド側で行うので、使い分けを覚える必要はない。
+
+**計画(plan mode の出力)を行に刻まない理由**: 計画は書いた時点のコード状態に対する
+実装手段を含む。キューの項目は数日後や無人ループに拾われるため、具体的であるほど
+**陳腐化した手段を忠実に実装してしまう**。また計画の章立ては説明の順序であって
+検証可能な増分の順序ではないため、節に沿って割ると内側ループが判定できない項目が並ぶ。
+
+plan mode 自体は併用してよい(未知のコードを探索しながら方針を決める用途では有効)。
+ただしその**出力**は実装の入力にせず、`/crystal:loop add` 経由で仕様に変換する。
 
 | 構成要素 | crystal での実装 |
 |---|---|
@@ -50,10 +75,13 @@ crystal はループを **外側**(仕事を見つけて渡す)と **内側**(�
 | connectors(MCP) | **既存の接続に委譲**。`/crystal:loop refill` は GitHub MCP を使う |
 | subagents(独立した検証者) | `crystal:verifier`(生成者と別コンテキストで実際にコマンドを実行) |
 
+### 構成要素の詳細
+
 - **ループ契約 `LOOP.md`**: トリガー / スコープ / 発見源 / 検証 / 停止条件 / ゲート の 6 節。
   `/crystal:loop init` が `templates/loop.md` から生成する
 - **発見源 (discover)**: `docs/backlog.md`(1行1項目のチェックリスト)。
   `scripts/loop-next.sh` が先頭の未着手項目を 1 件だけ返す(枯渇時は exit 3)。
+  追記は `scripts/loop-add.sh` が採番するので、行を手で書かない。
   GitHub Issues は `/crystal:loop refill` で backlog に取り込む
 - **予算**: `LOOP.md` の `max_runs_per_day` / `max_minutes_per_run`。
   `scripts/loop-guard.sh` が実行前に判定する(トークン課金額はシェルから観測できないため、
@@ -62,6 +90,30 @@ crystal はループを **外側**(仕事を見つけて渡す)と **内側**(�
   クラッシュやコンテキストのリセットを跨いで「何を回したか」が残る
 - **検証ラダー**: `rules/verification.md` に L1(決定的)〜 L5(人間)を定義。
   タスクが許す限り低いレベルに留め、検証者は生成者から独立させる
+
+### backlog と spec の使い分け
+
+**backlog は「やる」の管理、spec は「終わった」の定義**。寿命と粒度が違うので併存する。
+
+| | `docs/backlog.md` | `docs/spec/<name>.md` |
+|---|---|---|
+| 答える問い | **何を、どの順でやるか** | **1件について、どこまでやったら完了か** |
+| 粒度 | 1 行 × N 件 | 段落 × 1 件 |
+| 変化するもの | 順序と 未着手/完了 | 承認後は原則変えない |
+| 主な読み手 | `loop-next.sh`(機械) | 実装者と `crystal:verifier` |
+| 無いと困ること | ループが次の仕事を見つけられない | verifier が完了を判定できない |
+
+```
+backlog の1行 ──(取り出す)──> spec(境界と AC-* を固める)
+                                 └─> goal.md の DC-* ─> 内側ループ ─> verifier
+```
+
+- **全項目に spec は要らない**。受け入れ条件が 1〜2 行で自明なもの(typo 修正・依存更新)は
+  spec を省き、`.claude/goal.md` の `DC-*` を直接書く
+- 逆に 1 つの変更を N 件に分解した場合、その N 件は**1 つの spec を共有**する
+  (スコープの「含まない」は変更全体に対してしか定義できないため)。各行の `spec:` で同じパスを指す
+- `/crystal:spec` は単体でも使えるが、通常の導線では `/crystal:loop add` と
+  `/crystal:loop next` が内部で呼ぶ
 
 `.claude/loop/` は `.gitignore` に追加すること(`/crystal:loop init` が提案する)。
 
