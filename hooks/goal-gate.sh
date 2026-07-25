@@ -270,10 +270,11 @@ fi
 # これにより「JSON 以外が混ざったら正規表現で拾い直す」たぐいの後処理が不要になる。
 SCHEMA='{"type":"object","properties":{"met":{"type":"boolean"},"unmet":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["met","unmet","reason"],"additionalProperties":false}'
 
-# --max-budget-usd は判定器自身の暴走止め。実測で 1 回 $0.014〜$0.062 なので十分な余裕がある。
+# 判定器の暴走は上の TIMEOUT と hooks.json の timeout が止める。**金額では止めない**
+# (サブスクリプションでは total_cost_usd が参考値にすぎず、歯止めとして意味を持たないため)。
 JUDGE="${CRYSTAL_JUDGE_CMD:-}"
 if [ -z "$JUDGE" ]; then
-  JUDGE="claude -p --model claude-haiku-4-5-20251001 --settings {\"disableAllHooks\":true} --output-format json --max-budget-usd 0.5 --json-schema $SCHEMA"
+  JUDGE="claude -p --model claude-haiku-4-5-20251001 --settings {\"disableAllHooks\":true} --output-format json --json-schema $SCHEMA"
 fi
 
 # --- 判定 (再帰防止は disableAllHooks + env ガードの二重化) ---

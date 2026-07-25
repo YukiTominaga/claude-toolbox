@@ -9,8 +9,8 @@
 #   2. cloud の Routines はローカルのリポジトリにも MCP にも触れない。
 #      ローカルリポジトリを触るループの無人化は cron + claude -p が現実的な形になる
 #
-# 予算はドルで持つ。`--max-budget-usd` に「その日の残り」を渡し、実費 (total_cost_usd) を
-# 台帳に記録する。回数と時間による近似は対話セッション用のフォールバックとして残す。
+# 暴走の歯止めはターン数が担う。実費 (total_cost_usd) は**止めるためではなく**、
+# 1 イテレーションの重さを測る相対指標として台帳に記録し続ける。
 set -u
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -44,13 +44,6 @@ extra_args=""
 case "$turns" in
 '' | null) ;;
 *) extra_args="--max-turns $turns" ;;
-esac
-
-# 実費の上限が設定されている場合(API キー運用・CI)だけ、CLI 側にも渡す
-budget=$(printf '%s' "$guard" | jq -r '.cost_remaining_usd // empty')
-case "$budget" in
-'' | null) ;;
-*) extra_args="$extra_args --max-budget-usd $budget" ;;
 esac
 
 LEDGER=".claude/loop/run-log.jsonl"
@@ -98,8 +91,8 @@ cost=$(jq -r '.total_cost_usd // 0' "$out" 2>/dev/null)
 case "$cost" in '' | null) cost=0 ;; esac
 subtype=$(jq -r '.subtype // "unknown"' "$out" 2>/dev/null)
 
-# 実費は必ず記録する。失敗した実行のコストも予算から引かないと、
-# 失敗を繰り返すループが無限に課金できてしまう。
+# 実費は必ず記録する。失敗した実行の分も残す — 何が、どれだけ重かったかを
+# 後から読み返せるようにするため(実行を止める判断には使わない)。
 mkdir -p "$(dirname "$LEDGER")" 2>/dev/null
 jq -nc --arg ts "$(date -Iseconds)" --argjson c "$cost" --arg s "$subtype" \
   '{ts: $ts, event: "cost", cost_usd: $c, subtype: $s}' >>"$LEDGER" 2>/dev/null

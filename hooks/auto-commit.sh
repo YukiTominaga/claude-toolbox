@@ -9,7 +9,6 @@
 # 差し戻しの往復中(stop_hook_active)でもコミットする。goal-gate は内側ループを回すあいだ
 # 毎ラウンド差し戻すため、ここで素通しすると done 判定のラウンドまで含めて一度も
 # コミットされず、無人実行では成果がまるごと失われる。
-# ただし往復中はメッセージ生成の Haiku を呼ばない(往復ごとの課金を避ける)。
 #
 # 注意: このフックは git add -A 相当で未追跡ファイルも取り込む。これは
 # rules/git-workflow.md の一括 add 禁止に対する明示的な例外であり、
@@ -21,10 +20,8 @@ if [ "${CRYSTAL_GOAL_JUDGE:-}" = "1" ] || [ "${CRYSTAL_AUTOCOMMIT:-}" = "1" ]; t
   exit 0
 fi
 
-input=$(cat)
-
-# 差し戻しの往復中か。コミットはするが、メッセージ生成は定型にフォールバックする
-pushback=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
+# Stop hook の入力は使わないが、読み捨てないと書き手側が SIGPIPE で落ちうる。
+cat >/dev/null
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
@@ -77,7 +74,7 @@ fi
 
 # --- コミットメッセージ: Haiku で差分から生成し、失敗したら定型にフォールバック ---
 msg=""
-if [ "$pushback" != "true" ] && command -v claude >/dev/null 2>&1; then
+if command -v claude >/dev/null 2>&1; then
   prompt="以下の差分に対するコミットメッセージを1行だけ出力してください。
 Conventional Commits 形式 (feat: / fix: / docs: / chore: / refactor: / test:)、日本語、72文字以内。
 説明・コードフェンス・引用符は一切付けないこと。

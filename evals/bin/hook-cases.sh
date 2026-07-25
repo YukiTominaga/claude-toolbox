@@ -70,7 +70,7 @@ stub_judge() {
   mkdir -p "$WORK/bin"
   case "$1" in
   broken) payload='これは JSON ではありません' ;;
-  error) payload='{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":0.5}' ;;
+  error) payload='{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.5}' ;;
   *) payload=$(printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123,"result":"{\\"met\\":%s,\\"unmet\\":[\\"DC-1\\"],\\"reason\\":\\"スタブ判定\\"}"}' "$1") ;;
   esac
   cat >"$WORK/bin/judge" <<EOF
@@ -559,33 +559,33 @@ inner-loop-l1)
   ok "内側ループの全ラウンドで L1 が走り、コミットも積まれる"
   ;;
 
-# 差し戻しの往復中もコミットする。ただしメッセージ生成の judge は呼ばない。
+# 差し戻しの往復中もコミットし、メッセージも通常どおり生成する。
 auto-commit-inner-loop)
   init_git
   git -C "$WORK" checkout -q -b feature/loop
   stub_npm
   stub_claude
 
-  # 往復中: コミットはするが claude は呼ばない
+  # 往復中: コミットし、メッセージ生成も呼ぶ (金額を理由に品質を落とさない)
   before=$(commit_count)
   echo "work 1" >>"$WORK/feature.txt"
   autocommit true >/dev/null || ng "往復中の exit が 0 でない"
   [ "$(commit_count)" -eq "$((before + 1))" ] ||
     ng "往復中にコミットしていない (無人実行で成果が失われる)"
-  [ "$(calls_count '^claude')" -eq 0 ] || ng "往復中に judge を呼んだ (往復ごとに課金される)"
-  git -C "$WORK" log -1 --pretty=%s | grep -q '^chore: 自動コミット' ||
-    ng "往復中のメッセージが定型フォールバックでない: $(git -C "$WORK" log -1 --pretty=%s)"
+  [ "$(calls_count '^claude')" -eq 1 ] || ng "往復中にメッセージ生成を呼んでいない"
+  git -C "$WORK" log -1 --pretty=%s | grep -q 'スタブ生成メッセージ' ||
+    ng "往復中に生成メッセージを使っていない: $(git -C "$WORK" log -1 --pretty=%s)"
 
-  # 素直に終わったターン: judge でメッセージを生成する
+  # 素直に終わったターン: 同じくメッセージを生成する
   before=$(commit_count)
   echo "work 2" >>"$WORK/feature.txt"
   autocommit false >/dev/null || ng "通常ターンの exit が 0 でない"
   [ "$(commit_count)" -eq "$((before + 1))" ] || ng "通常ターンでコミットしていない"
-  [ "$(calls_count '^claude')" -eq 1 ] || ng "通常ターンで judge を呼んでいない"
+  [ "$(calls_count '^claude')" -eq 2 ] || ng "通常ターンでメッセージ生成を呼んでいない"
   git -C "$WORK" log -1 --pretty=%s | grep -q 'スタブ生成メッセージ' ||
     ng "通常ターンで生成メッセージを使っていない"
 
-  ok "往復中もコミットし、そのときだけ judge を呼ばない"
+  ok "往復中も通常ターンもコミットし、メッセージを生成する"
   ;;
 
 # ---------------------------------------------------------------------------

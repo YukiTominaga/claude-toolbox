@@ -6,11 +6,9 @@ status: active            # active | paused (paused の間 /crystal:loop next �
 max_runs_per_day: 8       # 予算: 1日の実行回数上限。超えたら loop-guard.sh が止める
 max_minutes_per_run: 30   # 予算: 1イテレーションの壁時計上限。goal.md の max_minutes の既定値になる
 max_turns_per_run: 300    # 暴走の歯止め: 1イテレーションのターン数上限 (loop-run.sh が渡す)。
-                          # 正常なイテレーションでは発火しない値にすること
-max_cost_usd_per_day:     # 実費の上限 (USD)。**サブスクリプションでは空のままにする** —
-                          # total_cost_usd はトークン数からの参考値で追加課金は発生せず、
-                          # 金額で止めても意味のある歯止めにならない。
-                          # API キー運用や CI で実費が発生する場合にだけ設定する
+                          # 正常なイテレーションでは発火しない値にすること。
+                          # **金額では止めない** — total_cost_usd はトークン数からの参考値で、
+                          # サブスクリプションでは追加課金も発生せず歯止めにならない
 issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue のラベル (カンマ区切り)
 ---
 # ループ契約
