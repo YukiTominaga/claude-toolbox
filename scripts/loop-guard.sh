@@ -10,10 +10,11 @@
 # --check を付けると記録せず判定だけ返す(状態を見るだけで予算を消費しない)。
 #
 # LOOP.md が無い場合は素通しする(fail-open)。予算はトークンではなく
-# 「1日の実行回数」と「1実行の壁時計時間」で表現する(シェルから観測できる量に限る)。
+# 「1日の実行回数」で表現する(シェルから観測できる量に限る)。
 # **金額では止めない**。サブスクリプションでは total_cost_usd はトークン数から計算した
 # 参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めにならない。
-# 暴走の歯止めは回数・時間・ターン数が担う。
+# 暴走の歯止めは回数とターン数が担う(経過時間による停止は撤廃済み。
+# docs/spec/budget-removal.md)。
 # 台帳に event を持たない旧形式の行は集計対象外になる。台帳は .gitignore 対象の
 # ローカル履歴なので、移行時に当日分が 0 から数え直しになっても実害はない。
 set -u
@@ -48,10 +49,8 @@ get_field() {
 
 status=$(get_field status)
 max_runs=$(get_field max_runs_per_day)
-max_minutes=$(get_field max_minutes_per_run)
 max_turns=$(get_field max_turns_per_run)
 case "$max_runs" in '' | *[!0-9]*) max_runs=8 ;; esac
-case "$max_minutes" in '' | *[!0-9]*) max_minutes=30 ;; esac
 case "$max_turns" in '' | *[!0-9]*) max_turns=300 ;; esac
 
 if [ -n "$status" ] && [ "$status" != "active" ]; then
@@ -80,8 +79,8 @@ if [ "$check_only" -eq 0 ]; then
   fi
 fi
 
-jq -nc --argjson r "$runs_today" --argjson m "$max_runs" --argjson t "$max_minutes" \
+jq -nc --argjson r "$runs_today" --argjson m "$max_runs" \
   --argjson tr "$max_turns" --argjson c "$check_only" \
-  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t,
+  '{ok:true, runs_today:$r, max_runs_per_day:$m,
     max_turns_per_run:$tr, recorded:($c==0)}'
 exit 0

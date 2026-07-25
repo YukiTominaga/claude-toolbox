@@ -5,11 +5,14 @@
 #
 # stop-gate.sh と異なり stop_hook_active では素通ししない(意図的な差異):
 # 差し戻し後の再停止でも毎回判定するのがこのゲートの目的であり、
-# 暴走防止は以下の停止条件 4 層が担う:
+# 暴走防止は以下の停止条件 3 層が担う:
 #   1. done-check   完了条件をすべて満たしたと判定 → status: done
 #   2. 反復上限     round > max_rounds → status: stalled
-#   3. 予算         経過時間 > max_minutes → status: stalled
-#   4. 無進捗       差分が変わらないラウンドが max_no_progress 回続く → status: stalled
+#   3. 無進捗       差分が変わらないラウンドが max_no_progress 回続く → status: stalled
+#
+# 経過時間による停止は撤廃した (docs/spec/budget-removal.md)。対話セッションでは人が
+# 見ているので時間で切る必要がなく、無人実行の歯止めは scripts/loop-run.sh が定数として
+# 持つ --max-turns が担う。
 set -u
 
 # --- 再帰防止: 内側の claude -p (judge) から起動された場合は素通し ---
@@ -73,25 +76,9 @@ ensure_field() {
 status=$(get_field status)
 [ "$status" = "active" ] || exit 0
 
-# 予算の既定値は LOOP.md の max_minutes_per_run に従う。README がこれを
-# 「goal-gate が停止条件として効かせる」と説明している以上、宣言した値が機械的に
-# 効かないと、歯止めが「モデルが手で写したかどうか」に依存してしまう。
-# 読むのは status: active を抜けた後にする(オプトイン時のコストゼロを保つため)。
-default_minutes=60
-if [ -f "LOOP.md" ]; then
-  v=$(awk '
-    /^---$/ { fm++; next }
-    fm==1 && /^max_minutes_per_run:/ {
-      sub("^max_minutes_per_run: *", ""); sub(" *#.*$", ""); gsub(/^ +| +$/, ""); print; exit
-    }' LOOP.md)
-  case "$v" in '' | *[!0-9]*) ;; *) default_minutes=$v ;; esac
-fi
-
 ensure_field no_progress 0
 ensure_field max_no_progress 2
 ensure_field last_sig ""
-ensure_field started_epoch ""
-ensure_field max_minutes "$default_minutes"
 
 round=$(get_field round)
 max_rounds=$(get_field max_rounds)
@@ -108,31 +95,7 @@ if [ "$round" -gt "$max_rounds" ]; then
   exit 0
 fi
 
-# --- 停止条件 3: 壁時計予算 ---
-# トークン課金額はシェルから観測できないため、予算は経過時間で表現する。
-# 開始時刻はこのフックが初回ラウンドで打刻する(date +%s は環境差がなく移植性が高い)。
-now_epoch=$(date +%s 2>/dev/null)
-started_epoch=$(get_field started_epoch)
-max_minutes=$(get_field max_minutes)
-case "$max_minutes" in '' | *[!0-9]*) max_minutes=$default_minutes ;; esac
-case "$started_epoch" in
-'' | *[!0-9]*)
-  [ -n "$now_epoch" ] && update_field started_epoch "$now_epoch"
-  ;;
-*)
-  if [ -n "$now_epoch" ] && [ "$max_minutes" -gt 0 ]; then
-    elapsed_min=$(((now_epoch - started_epoch) / 60))
-    if [ "$elapsed_min" -ge "$max_minutes" ]; then
-      update_field status stalled
-      printf '{"systemMessage":"goal-gate: 予算 (%s 分) を超えたため自動判定を停止しました (経過 %s 分, status: stalled)。/crystal:goal status で確認してください。"}\n' \
-        "$max_minutes" "$elapsed_min"
-      exit 0
-    fi
-  fi
-  ;;
-esac
-
-# --- 停止条件 4: 無進捗検知 ---
+# --- 停止条件 3: 無進捗検知 ---
 # 前ラウンドから状態が変わっていないラウンドは、判定器を呼ばずに差し戻す(コスト削減も兼ねる)。
 # git 管理下でない場合は署名が取れないのでこの層はスキップする。
 #
@@ -143,7 +106,7 @@ esac
 #
 # 逆に `.claude/loop/` と `.claude/goal.md` は署名から**除外する**。台帳・判定履歴・
 # ゴール自身はループの記帳であってエージェントの作業ではない。含めると毎ラウンド署名が
-# 変わり、完全に停滞していても「前進している」と誤認して止まらなくなる(= 停止条件 4 が死ぬ)。
+# 変わり、完全に停滞していても「前進している」と誤認して止まらなくなる(= 停止条件 3 が死ぬ)。
 # .gitignore に頼らず署名側で除外する: gitignore していないプロジェクトで静かに壊れるため。
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   own=":(exclude).claude/loop"
@@ -209,7 +172,7 @@ fi
 # --- L1 検証 (停止条件の後、判定器の前) ---
 # 検証ラダーの安い順に並べる。赤なら judge を呼ばずに差し戻す(コストも下がる)。
 # 位置は 2 つの制約で決まっており、どちらも eval で固定している:
-#   - 停止条件 4 層より「後」: 前に置くと赤の間ずっと exit 2 でラウンド上限に到達せず、
+#   - 停止条件 3 層より「後」: 前に置くと赤の間ずっと exit 2 でラウンド上限に到達せず、
 #     このフック自身が無限ループになる (goal-l1-after-stop-rules)
 #   - claude の有無を見るより「前」: CLI が無い環境でも L1 だけは残る
 #     (goal-l1-blocks-without-claude)

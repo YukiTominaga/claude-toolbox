@@ -12,7 +12,7 @@ expect_output: ^OK:
 
 判定履歴を `~/.claude/logs/goal-gate.jsonl` から `.claude/loop/judge-log.jsonl` に
 移したところ、goal-gate が毎ラウンド書き込むそのファイルが無進捗検知の署名に入り、
-**完全に停滞していても署名が毎回変わって stalled にならなくなった**。停止条件 4 が丸ごと死ぬ。
+**完全に停滞していても署名が毎回変わって stalled にならなくなった**。停止条件 3 が丸ごと死ぬ。
 
 `.claude/loop/` は `.gitignore` 対象にする運用だが、それに依存すると
 gitignore していないプロジェクトで静かに壊れる。署名計算側で pathspec 除外する。

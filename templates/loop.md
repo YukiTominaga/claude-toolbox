@@ -4,7 +4,6 @@
 ---
 status: active            # active | paused (paused の間 /crystal:loop next は何もしない)
 max_runs_per_day: 8       # 予算: 1日の実行回数上限。超えたら loop-guard.sh が止める
-max_minutes_per_run: 30   # 予算: 1イテレーションの壁時計上限。goal.md の max_minutes の既定値になる
 max_turns_per_run: 300    # 暴走の歯止め: 1イテレーションのターン数上限 (loop-run.sh が渡す)。
                           # 正常なイテレーションでは発火しない値にすること。
                           # **金額では止めない** — total_cost_usd はトークン数からの参考値で、
@@ -57,12 +56,15 @@ issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue 
 
 ## 5. 停止条件 (stop rules)
 
-<!-- 4 層すべてを効かせる。単独の層に頼らない。 -->
+<!-- 挙げた層すべてを効かせる。単独の層に頼らない。
+     goal-gate が駆動する内側ループの停止条件は done-check / 反復上限 / 無進捗 の 3 層。
+     予算は外側ループ (loop-guard.sh) の歯止めで、層数には数えない。
+     経過時間による停止は crystal 本体で撤廃済み (docs/spec/budget-removal.md)。 -->
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
-- **予算**: 上の `max_runs_per_day` / `max_minutes_per_run`
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress` 回続いたら `status: stalled`
+- **予算**: 上の `max_runs_per_day`
 
 ## ゲート (人間承認が必要な操作)
 

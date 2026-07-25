@@ -60,7 +60,7 @@ git add -A -- . >/dev/null 2>&1 || exit 0
 
 # ループ自身の記帳 (.claude/loop/ の台帳と判定履歴、.claude/goal.md) はコミットしない。
 # エージェントの作業ではないうえ、これをコミットすると HEAD が毎ラウンド動き、
-# goal-gate の無進捗検知が「前進している」と誤認して停止条件 4 が死ぬ。
+# goal-gate の無進捗検知が「前進している」と誤認して停止条件 3 が死ぬ。
 # .gitignore に頼らずここで外す(gitignore していないプロジェクトで静かに壊れるため)。
 #
 # add の pathspec に `:(exclude)` を書く方法は使えない: 対象が .gitignore 済みだと

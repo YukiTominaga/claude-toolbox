@@ -112,7 +112,7 @@ EOF
 
 commit_count() { git -C "$WORK" rev-list --count HEAD 2>/dev/null || echo 0; }
 
-# .claude/goal.md を作る。$1=max_no_progress $2=started_epoch $3=max_minutes
+# .claude/goal.md を作る。$1=max_no_progress
 write_goal() {
   mkdir -p "$WORK/.claude"
   cat >"$WORK/.claude/goal.md" <<EOF
@@ -123,8 +123,6 @@ max_rounds: 5
 no_progress: 0
 max_no_progress: $1
 last_sig:
-started_epoch: $2
-max_minutes: $3
 created: 2026-01-01
 spec:
 ---
@@ -356,7 +354,7 @@ stop-gate-no-state-dir)
 # = 挿入位置が `command -v claude` より前であることの証明。
 goal-l1-blocks-without-claude)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   pkg_json
   stub_npm
   set_npm 1
@@ -371,7 +369,7 @@ goal-l1-blocks-without-claude)
 # goal.md を読ませて回避すると「どちらも検証しない」に倒れうるため (docs/spec/Q-7.md)。
 goal-l1-runs-in-pushback-round)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   pkg_json
   stub_npm
   set_npm 1
@@ -386,7 +384,7 @@ goal-l1-runs-in-pushback-round)
 # 緑なら L1 を通過して判定器の層まで到達する (claude 不在なので fail-open で exit 0)
 goal-l1-green-passes)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   pkg_json
   stub_npm
   goalgate >/dev/null 2>&1 || ng "緑なのに差し戻した"
@@ -394,7 +392,7 @@ goal-l1-green-passes)
   ok "緑なら判定器の層まで到達する"
   ;;
 
-# **順序の固定**: L1 は停止条件 4 層より後ろにある。
+# **順序の固定**: L1 は停止条件 3 層より後ろにある。
 # 前に置くと、赤の間ずっと exit 2 でラウンド上限に到達せず、この hook 自身が無限ループになる。
 goal-l1-after-stop-rules)
   init_git
@@ -411,28 +409,21 @@ goal-l1-after-stop-rules)
   [ "$(goal_field status)" = "stalled" ] || ng "(a) stalled になっていない"
   [ "$(calls_count)" -eq 0 ] || ng "(a) 停止条件より前に L1 を実行した"
 
-  # (b) 壁時計予算
-  write_goal 2 "$(($(date +%s) - 7200))" 60
+  # (b) 無進捗。1 回目で hook 自身に last_sig を打たせ、何も変えずに 2 回目で上限に触れさせる
+  write_goal 1
+  goalgate >/dev/null 2>&1
   reset_calls
-  goalgate >/dev/null 2>&1 || ng "(b) 予算超過で exit が 0 でない"
+  goalgate >/dev/null 2>&1 || ng "(b) 無進捗の上限で exit が 0 でない"
   [ "$(goal_field status)" = "stalled" ] || ng "(b) stalled になっていない"
   [ "$(calls_count)" -eq 0 ] || ng "(b) 停止条件より前に L1 を実行した"
 
-  # (c) 無進捗。1 回目で hook 自身に last_sig を打たせ、何も変えずに 2 回目で上限に触れさせる
-  write_goal 1 "$(date +%s)" 60
-  goalgate >/dev/null 2>&1
-  reset_calls
-  goalgate >/dev/null 2>&1 || ng "(c) 無進捗の上限で exit が 0 でない"
-  [ "$(goal_field status)" = "stalled" ] || ng "(c) stalled になっていない"
-  [ "$(calls_count)" -eq 0 ] || ng "(c) 停止条件より前に L1 を実行した"
-
-  ok "L1 は停止条件 4 層より後ろにある"
+  ok "L1 は停止条件 3 層より後ろにある"
   ;;
 
 # 赤い L1 でもラウンドは消費され、ループは必ず有限で終わる
 goal-l1-round-consumed)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   pkg_json
   stub_npm
   set_npm 1
@@ -461,7 +452,7 @@ goal-l1-round-consumed)
 # 達成と判定されたら status: done になり、コストが履歴に残る
 goal-judge-met)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   stub_npm
   stub_judge true
   export CRYSTAL_JUDGE_CMD="$WORK/bin/judge"
@@ -478,7 +469,7 @@ goal-judge-met)
 # 未達なら差し戻し、未達条件が伝わる
 goal-judge-unmet)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   stub_npm
   stub_judge false
   export CRYSTAL_JUDGE_CMD="$WORK/bin/judge"
@@ -493,7 +484,7 @@ goal-judge-unmet)
 # 判定器が壊れた出力やエラーを返したら fail-open (ループを止めない)
 goal-judge-broken)
   init_git
-  write_goal 2 "$(date +%s)" 60
+  write_goal 2
   stub_npm
 
   # ラウンド間で作業ツリーを変える。変えないと無進捗層が判定器より手前で差し戻し、
@@ -524,7 +515,7 @@ inner-loop-l1)
   init_git
   git -C "$WORK" checkout -q -b feature/loop
   echo ".claude/goal.md" >"$WORK/.gitignore"
-  write_goal 2 "$(date +%s)" 600
+  write_goal 2
   sed -i.bak 's/^max_rounds:.*/max_rounds: 20/' "$WORK/.claude/goal.md" &&
     rm -f "$WORK/.claude/goal.md.bak"
   pkg_json
@@ -592,22 +583,35 @@ auto-commit-inner-loop)
 # 停止条件 (判定器より手前の層)
 # ---------------------------------------------------------------------------
 
-# 停止条件 3: 経過時間が max_minutes を超えたら stalled
+# 経過時間による停止は撤廃済み (docs/spec/budget-removal.md)。
+# 10 年前に始めたゴールでも時間では止めず、停止条件を抜けて L1 まで進むこと。
 goal-budget)
   init_git
-  write_goal 2 "$(($(date +%s) - 7200))" 60
-  goalgate >/dev/null 2>&1 || ng "予算超過時の exit が 0 でない"
-  [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
-  ok "経過時間の超過で stalled になる"
+  pkg_json
+  stub_npm
+  set_npm 0
+  write_goal 2
+  # 撤廃前の実装が読んでいた 2 フィールドを明示的に置く。残骸を読んで止める実装なら落ちる
+  printf -- '---\nstatus: active\nround: 0\nmax_rounds: 5\nno_progress: 0\nmax_no_progress: 2\nlast_sig:\nstarted_epoch: %s\nmax_minutes: 1\ncreated: 2026-01-01\nspec:\n---\n# ゴール\n\n## 完了条件\n\n- [ ] DC-1: x\n' \
+    "$(($(date +%s) - 315360000))" >"$WORK/.claude/goal.md"
+  reset_calls
+  goalgate >/dev/null 2>&1
+  [ "$(goal_field status)" = "active" ] ||
+    ng "経過時間で止めている (status=$(goal_field status))"
+  [ "$(goal_field round)" = "1" ] || ng "round が進んでいない (round=$(goal_field round))"
+  # 停止条件で抜けていれば L1 は 0 回。到達していれば typecheck/lint/test で 3 回走る
+  [ "$(calls_count npm)" -gt 0 ] ||
+    ng "停止条件で抜けて L1 に到達していない (npm calls=$(calls_count npm))"
+  ok "経過時間では stalled にならない"
   ;;
 
-# 停止条件 3 の既定値: LOOP.md の max_minutes_per_run を goal.md に引き継ぐ。
-# README が「goal-gate が停止条件として効かせる」と書いているのに、goal-gate は
-# LOOP.md を一度も読まず 60 を固定で使っていた(宣言した予算が効かない状態だった)。
+# 時間予算の撤廃を固定する: goal-gate は max_minutes / started_epoch をもう作らない。
+# LOOP.md に max_minutes_per_run が残っていても読まないこと(旧 LOOP.md を持つ
+# プロジェクトで撤廃が黙って無効化されるのを防ぐ)。
 goal-minutes-from-loop)
   init_git
   mkdir -p "$WORK/.claude"
-  # max_minutes 行を持たない goal.md = ensure_field が既定値を埋める経路
+  # 2 フィールドを持たない goal.md = 撤廃前は ensure_field が既定値を埋めていた経路
   cat >"$WORK/.claude/goal.md" <<'EOF'
 ---
 status: active
@@ -628,39 +632,31 @@ max_minutes_per_run: 15
 ---
 EOF
   goalgate >/dev/null 2>&1
-  [ "$(goal_field max_minutes)" = "15" ] ||
-    ng "LOOP.md の max_minutes_per_run が既定値に使われていない (max_minutes=$(goal_field max_minutes))"
+  # 「書き込まない」の否定 assertion だけでは、何もしない hook でも PASS してしまう。
+  # hook が実際に起動したことを round で押さえてから否定を見る
+  [ "$(goal_field round)" = "1" ] ||
+    ng "hook が起動していない (round=$(goal_field round))"
+  grep -qE '^max_minutes:' "$WORK/.claude/goal.md" &&
+    ng "goal.md に max_minutes が書き込まれた (LOOP.md の宣言を読んでいる)"
+  grep -qE '^started_epoch:' "$WORK/.claude/goal.md" &&
+    ng "goal.md に started_epoch が書き込まれた"
 
-  # LOOP.md が無ければ従来どおり 60
-  rm -f "$WORK/LOOP.md"
-  cat >"$WORK/.claude/goal.md" <<'EOF'
----
-status: active
-round: 0
-max_rounds: 5
----
-# ゴール: eval
+  # 導線側の穴も塞ぐ: テンプレートに 2 フィールドが残っていると、実装を直しても
+  # /crystal:goal が作る goal.md 経由でモデルが書き戻し、時間予算が復活する
+  grep -q 'max_minutes' "$ROOT/templates/goal.md" &&
+    ng "templates/goal.md に max_minutes の記述が残っている (撤廃が導線で無効化される)"
+  grep -q 'started_epoch' "$ROOT/templates/goal.md" &&
+    ng "templates/goal.md に started_epoch の記述が残っている"
+  grep -q 'max_minutes\|started_epoch' "$ROOT/commands/goal.md" "$ROOT/commands/loop.md" &&
+    ng "commands/ に max_minutes / started_epoch の指示が残っている"
 
-## 完了条件
-
-- [ ] DC-1: 何か
-EOF
-  goalgate >/dev/null 2>&1
-  [ "$(goal_field max_minutes)" = "60" ] ||
-    ng "LOOP.md 不在時の既定が 60 でない (max_minutes=$(goal_field max_minutes))"
-
-  # 導線側の穴も塞ぐ: テンプレートに max_minutes 行があると ensure_field が上書きしないため、
-  # 実装がいくら正しくても /crystal:goal が作った goal.md では LOOP.md の宣言が効かなくなる
-  grep -qE '^max_minutes:' "$ROOT/templates/goal.md" &&
-    ng "templates/goal.md に max_minutes 行がある (LOOP.md の宣言が導線で無効化される)"
-
-  ok "LOOP.md の max_minutes_per_run が goal.md の予算の既定値になる"
+  ok "goal-gate は max_minutes / started_epoch を作らない"
   ;;
 
-# 停止条件 4: 差分に変化がないラウンドが続いたら stalled
+# 停止条件 3: 差分に変化がないラウンドが続いたら stalled
 goal-no-progress)
   init_git
-  write_goal 1 "$(date +%s)" 60
+  write_goal 1
   # 署名をテスト側で再計算しない(実装と二重管理になる)。
   # 1 回目で hook 自身に last_sig を打たせ、何も変えずに 2 回目を回す。
   goalgate >/dev/null 2>&1 || ng "1 回目の exit が 0 でない"
@@ -671,12 +667,12 @@ goal-no-progress)
   ok "無進捗の継続で stalled になる"
   ;;
 
-# 停止条件 4: 未追跡ファイルへの追記も「前進」に数える
+# 停止条件 3: 未追跡ファイルへの追記も「前進」に数える
 # git status --porcelain は未追跡ファイルの名前しか出さないので、内容を署名に含めないと
 # 既存の未追跡ファイルへの追記が見えず、前進しているのに stalled になる。
 goal-no-progress-sees-untracked)
   init_git
-  write_goal 2 "$(date +%s)" 600
+  write_goal 2
   echo "a" >"$WORK/draft.txt" # 未追跡のまま作業する (auto-commit を通さない構成)
 
   goalgate >/dev/null 2>&1 || ng "1 回目の exit が 0 でない"
@@ -709,13 +705,13 @@ goal-no-progress-sees-untracked)
   ok "未追跡ファイルへの追記を前進として数える (非 ASCII 名を含む)"
   ;;
 
-# 停止条件 4: ループ自身の記帳 (.claude/loop/) は「前進」に数えない
+# 停止条件 3: ループ自身の記帳 (.claude/loop/) は「前進」に数えない
 # 判定履歴や台帳を署名に含めると、完全に停滞していても毎ラウンド署名が変わり、
-# 停止条件 4 が丸ごと死ぬ。判定履歴をプロジェクト内に移したときに実際に踏んだ回帰。
+# 停止条件 3 が丸ごと死ぬ。判定履歴をプロジェクト内に移したときに実際に踏んだ回帰。
 goal-no-progress-ignores-ledger)
   init_git
   git -C "$WORK" checkout -q -b feature/loop
-  write_goal 2 "$(date +%s)" 600
+  write_goal 2
   # 台帳を追跡対象にする = 最も壊れやすい構成 (.gitignore していないプロジェクト)
   mkdir -p "$WORK/.claude/loop"
   echo '{"ts":"x","event":"start"}' >"$WORK/.claude/loop/run-log.jsonl"
@@ -742,7 +738,7 @@ goal-migrate)
   printf -- '---\nstatus: active\nround: 5\nmax_rounds: 5\n---\n# ゴール\n\n## 完了条件\n\n- [ ] DC-1: x\n' \
     >"$WORK/.claude/goal.md"
   goalgate >/dev/null 2>&1 || ng "ラウンド上限到達時の exit が 0 でない"
-  for k in no_progress max_no_progress last_sig started_epoch max_minutes; do
+  for k in no_progress max_no_progress last_sig; do
     grep -qE "^$k:" "$WORK/.claude/goal.md" || ng "$k が補われていない"
   done
   [ "$(goal_field round)" = "6" ] || ng "round が進んでいない"
@@ -766,8 +762,6 @@ max_rounds: 20
 no_progress: 0
 max_no_progress: 2
 last_sig:
-started_epoch: $(date +%s)
-max_minutes: 600
 ---
 # ゴール: eval
 

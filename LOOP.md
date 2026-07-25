@@ -1,7 +1,6 @@
 ---
 status: active
 max_runs_per_day: 8
-max_minutes_per_run: 30
 max_turns_per_run: 300
 issue_labels:
 ---
@@ -30,7 +29,11 @@ verifier 自身が判定できず、いつまでも昇格しないか、根拠�
 - 触れてよい範囲:
   - `skills/` `agents/` `commands/` `rules/` `templates/` `scripts/` `hooks/` `evals/`
   - `README.md`
+  - `docs/`(`backlog.md` / `spec/` / `signals/`)。ループは毎イテレーション
+    ここに記帳する。範囲外にしておくと、手順どおり動くだけで契約違反になる
+  - `LOOP.md` の**本文**。契約の文言はループが直してよい
 - 触れてはいけない範囲:
+  - `LOOP.md` の frontmatter(本文と違い範囲外。下の「ゲート」を参照)
   - `.claude-plugin/marketplace.json`(ローカルマーケットプレイスの定義)
   - `.claude-plugin/plugin.json` の `version` 以外のフィールド
   - このリポジトリの外(`~/.claude/` 配下のユーザー環境、他リポジトリ)
@@ -62,7 +65,7 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 | Stop hook の相互作用(実 Claude Code 経由) | L3 | `./scripts/loop-smoke.sh` — **手動**。Claude Code を更新したときと Stop hook の構成を変えたときに回す |
 | 下記ゲートに該当する操作 | L5 | 人間承認 |
 
-**stalled で終わったターンのコードは未検証である**。停止条件(ラウンド上限・予算・無進捗)に
+**stalled で終わったターンのコードは未検証である**。停止条件(ラウンド上限・無進捗)に
 触れたラウンドでは goal-gate が L1 検証より手前で抜けるため。stalled は人間を呼ぶ状態
 (L5 に上がる)なので、そこから先は人が確かめること。
 
@@ -74,17 +77,36 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
-- **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30` / `max_turns_per_run: 300`。
-  **金額では止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
-  計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めに
-  ならない。歯止めは回数・時間・ターン数が担う。実費は記録だけ続ける
-  (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress`(既定 2)回続いたら `status: stalled`
+- **予算**: 上の `max_runs_per_day: 8` / `max_turns_per_run: 300`。
+  **経過時間では止めない**(撤廃済み。`docs/spec/budget-removal.md`)。対話セッションでは人が
+  見ているため、時間で切ると邪魔になるだけで暴走は防げない。
+  **金額でも止めない**。このアカウントはサブスクリプションで、`total_cost_usd` はトークン数から
+  計算した参考値にすぎず追加課金も発生しないため、金額を上限にしても意味のある歯止めに
+  ならない。実費は記録だけ続ける
+  (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
 
 ## ゲート (人間承認が必要な操作)
 
 - Pull Request の作成・マージ
 - 依存関係の追加・更新、その他の破壊的な操作
+- この `LOOP.md` の frontmatter の変更。とりわけ `status` と予算の 2 項目
+  (`max_runs_per_day` / `max_turns_per_run`)。
+  自分で緩められる歯止めは歯止めではない。`status: paused` を自分で `active` に
+  戻せるなら停止は効かず、`max_runs_per_day` を自分で増やせるなら日次上限は上限でない。
+  値を変えるべき根拠を見つけたら、**変えずに報告する**(`docs/backlog.md` に積むか
+  signal を 1 件残す)。予算の 2 項目は「5. 停止条件」が本文にも転記しているので、
+  そちらの数値も同じく変更しない(本文は範囲内なので、書き換えれば強制値は変わらないまま
+  契約文だけが実効値と食い違う)
+
+人間が明示的に指示した frontmatter の変更は、その指示が承認そのものなので実行してよい
+(例: `/crystal:loop stop` による `status: paused`)。ゲートが禁じているのは
+**ループが自分の判断で書き換えること**である。
+
+このうち **frontmatter の変更だけは機械的に強制されない**。`hooks/pre-bash-guard.sh` が
+無人実行で deny するのは Bash コマンドであり、Edit / Write によるファイル変更は見ていない。
+上の 2 つは該当コマンドが deny されるが、frontmatter は書けてしまう。ここは規律で守る箇所で、
+破れば git 履歴に残る。
 
 `git push` は**ゲートにしない**。feature branch への追記に限りループが自分で行ってよい
 (force push と履歴操作は「2. 作業範囲」で禁止済み)。理由:

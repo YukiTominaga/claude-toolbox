@@ -20,8 +20,10 @@ expect_output: ^OK:
 - `LOOP.md` が「無人化には `max_cost_usd_per_day` を設定済みであること」を昇格条件に
   掲げる一方、同じファイルが「空のままにする」と指示しており、**永久に満たせない条件**だった
 
-歯止めは回数 (`max_runs_per_day`)・時間 (`max_minutes_per_run`)・
-ターン数 (`max_turns_per_run`) が担う。どれも課金形態に依存しない。
+歯止めは回数 (`max_runs_per_day`) とターン数 (`max_turns_per_run`) が担う。
+どちらも課金形態に依存しない。経過時間 (`max_minutes_per_run`) も歯止めの 1 つだったが、
+別途撤廃した(`docs/spec/budget-removal.md` — 対話セッションでは人が見ているため
+時間で切っても暴走は防げず、作業を切られる不便だけが残る)。
 
 このケースは、古い `LOOP.md` に `max_cost_usd_per_day` が残っていても、
 台帳に大きな cost 行が積まれていても、ゲートが**素通しする**ことを確認する。
