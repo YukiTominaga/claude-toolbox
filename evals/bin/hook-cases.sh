@@ -222,28 +222,82 @@ stop-gate-green)
   ok "変更があって緑なら通す"
   ;;
 
-# 変更が無ければ検証しない (質問応答セッション等)
+# 変更が無ければ検証しない (質問応答セッション等)。
+# 自分のカウントファイル (未追跡) を「変更あり」と数えないことも同時に確認する。
 stop-gate-clean)
   init_git
   pkg_json
   stub_npm
   set_npm 1
   git -C "$WORK" add -A && git -C "$WORK" commit -qm fixture
+  mkdir -p "$WORK/.claude/loop" && echo 2 >"$WORK/.claude/loop/stop-gate-pushback"
   stopgate || ng "変更が無いのに差し戻した"
-  [ "$(calls_count)" -eq 0 ] || ng "変更が無いのに検証を実行した"
+  [ "$(calls_count)" -eq 0 ] || ng "変更が無いのに検証を実行した (カウントファイルを変更と数えた疑い)"
   ok "変更が無ければ検証しない"
   ;;
 
-# 差し戻しの往復中は素通しする (内側ループでは goal-gate が検証を担う)。
-# ここを外すと stop-gate が停止条件を持たないまま無限に差し戻すようになる。
-stop-gate-active)
+# 差し戻しの往復中でも検証する。ここを素通しにすると、goal.md の無いセッションでは
+# 一度差し戻された時点で L1 が二度と走らなくなる (これが Q-7 で塞いだ穴)。
+stop-gate-active-red)
   init_git
   pkg_json
   stub_npm
   set_npm 1
-  stopgate true || ng "stop_hook_active なのに差し戻した"
-  [ "$(calls_count)" -eq 0 ] || ng "stop_hook_active なのに検証を実行した (二重実行)"
-  ok "差し戻しの往復中は素通しする"
+  stopgate true 2>/dev/null && ng "往復中に赤なのに差し戻していない"
+  [ "$(calls_count)" -gt 0 ] || ng "往復中に検証を実行していない"
+  ok "往復中でも赤なら差し戻す"
+  ;;
+
+# 差し戻しは連鎖内で 3 回まで。4 回目は検証せず素通しし、systemMessage で知らせる。
+stop-gate-pushback-limit)
+  init_git
+  pkg_json
+  stub_npm
+  set_npm 1
+  stopgate 2>/dev/null && ng "1 回目に差し戻していない"
+  for i in 2 3; do
+    stopgate true 2>/dev/null && ng "$i 回目に差し戻していない"
+  done
+  before=$(calls_count)
+  out=$(stopgate true 2>/dev/null) || ng "上限を超えても差し戻し続けている (無限ループ)"
+  [ "$(calls_count)" -eq "$before" ] || ng "上限到達後に検証を実行した"
+  printf '%s' "$out" | grep -q '差し戻し上限' || ng "上限到達を systemMessage で知らせていない"
+  ok "差し戻しは 3 回まで。4 回目は素通しして知らせる"
+  ;;
+
+# stop_hook_active: false (連鎖が切れた合図) でカウントがリセットされる
+stop-gate-pushback-reset)
+  init_git
+  pkg_json
+  stub_npm
+  set_npm 1
+  stopgate 2>/dev/null
+  stopgate true 2>/dev/null
+  stopgate true 2>/dev/null
+  stopgate 2>/dev/null && ng "false のラウンドで差し戻していない"
+  [ "$(cat "$WORK/.claude/loop/stop-gate-pushback")" = "1" ] ||
+    ng "false でカウントがリセットされていない ($(cat "$WORK/.claude/loop/stop-gate-pushback"))"
+  stopgate true 2>/dev/null && ng "リセット後に差し戻せていない"
+  ok "stop_hook_active: false でカウントがリセットされる"
+  ;;
+
+# カウントを永続化できない環境では、往復中は素通しする (上限を数えられないため)。
+# 初回停止は 1 回で済むので従来どおり検証する。
+stop-gate-no-state-dir)
+  init_git
+  pkg_json
+  stub_npm
+  set_npm 1
+  mkdir -p "$WORK/.claude/loop" && chmod 500 "$WORK/.claude/loop"
+  # root で回すと chmod が効かず前提が崩れる。効いていないなら判定せず落とす
+  : 2>/dev/null >>"$WORK/.claude/loop/stop-gate-pushback" &&
+    ng "前提が崩れている (chmod 500 のディレクトリに書けてしまう)"
+  stopgate true || ng "カウントできないのに往復中に差し戻した (無限ループの危険)"
+  [ "$(calls_count)" -eq 0 ] || ng "往復中に検証を実行した"
+  stopgate 2>/dev/null && ng "初回停止で赤なのに差し戻していない"
+  [ "$(calls_count)" -gt 0 ] || ng "初回停止で検証を実行していない"
+  chmod 700 "$WORK/.claude/loop"
+  ok "カウントできない環境では往復中だけ素通しする"
   ;;
 
 # ---------------------------------------------------------------------------
@@ -267,7 +321,8 @@ goal-l1-blocks-without-claude)
   ;;
 
 # 差し戻しの往復ラウンド (stop_hook_active=true) でも L1 が走る。
-# 同じラウンドで stop-gate は走らないので、二重実行にならないことも同時に確認する。
+# stop-gate も同じラウンドで検証する (二重実行) が、これは許容した設計上の帰結。
+# goal.md を読ませて回避すると「どちらも検証しない」に倒れうるため (docs/spec/Q-7.md)。
 goal-l1-runs-in-pushback-round)
   init_git
   write_goal 2 "$(date +%s)" 60
@@ -278,8 +333,8 @@ goal-l1-runs-in-pushback-round)
   before=$(calls_count)
   [ "$before" -gt 0 ] || ng "往復ラウンドで検証が走っていない (これが直したかった欠陥)"
   stopgate true >/dev/null 2>&1
-  [ "$(calls_count)" -eq "$before" ] || ng "同じラウンドで stop-gate も検証した (二重実行)"
-  ok "往復ラウンドで L1 が走り、二重実行にならない"
+  [ "$(calls_count)" -gt "$before" ] || ng "往復ラウンドで stop-gate の L1 が走っていない"
+  ok "往復ラウンドで goal-gate と stop-gate の両方の L1 が走る"
   ;;
 
 # 緑なら L1 を通過して判定器の層まで到達する (claude 不在なので fail-open で exit 0)
@@ -433,12 +488,13 @@ inner-loop-l1)
 
   turn false 1 && ng "round1: 赤なのに差し戻していない"
 
-  # 往復ラウンドでは stop-gate が素通しするので、L1 はちょうど 1 回分 (3 コマンド) 増える
+  # 往復ラウンドでは stop-gate と goal-gate が両方検証するので 2 回分 (6 コマンド) 増える。
+  # 二重実行は Q-7 で許容した帰結 (docs/spec/Q-7.md の「含まないもの」)。
   for i in 2 3; do
     before=$(calls_count '^npm')
     turn true "$i" && ng "round$i: 赤なのに差し戻していない (L1 の床が抜けている)"
-    [ "$(calls_count '^npm')" -eq "$((before + 3))" ] ||
-      ng "round$i: L1 の実行回数がちょうど 1 回分でない (二重実行または未実行)"
+    [ "$(calls_count '^npm')" -eq "$((before + 6))" ] ||
+      ng "round$i: L1 の実行回数が 2 回分でない ($(($(calls_count '^npm') - before)) コマンド)"
   done
 
   # 緑にすれば通過し、判定器の層まで到達する (claude 不在なので fail-open)
