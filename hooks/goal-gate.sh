@@ -144,15 +144,26 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     # auto-commit が効かない構成 (main ブランチ / 機密パス検出で中止) では前進中に stalled になる。
     #
     # cksum は POSIX で、shasum (perl 同梱) や sha1sum (GNU) と違い環境を選ばない。
-    # 読むのは --exclude-standard を通ったファイルだけなので、.gitignore された
-    # ビルド成果物や node_modules は入らない。
-    # xargs は入力が空だと引数なしで cksum を起動し、cksum は標準入力を読みにいく。
-    # このフックでは stdin が既に `input=$(cat)` で読み切られているため実測では即 EOF で
-    # 返るが、それは stdin が何であるかに依存した偶然でしかない。空かどうかを先に見て、
-    # 挙動を stdin から切り離す (-r は GNU 専用で macOS では使えない)。
-    untracked=$(git ls-files --others --exclude-standard -- . "$own" "$own_goal" 2>/dev/null)
-    if [ -n "$untracked" ]; then
-      printf '%s\n' "$untracked" | tr '\n' '\0' | xargs -0 cksum 2>/dev/null
+    #
+    # **`-z` を必ず使う**。git ls-files は既定 (core.quotePath=true) で非 ASCII の
+    # パスを C クォートして出力するため、改行区切りで受け取ると "\350\250..." という
+    # 実在しないパスになり、cksum が失敗して内容が署名に入らない。日本語名のファイルで
+    # 前進しているのに stalled になる。quotePath=false を設定しているマシンでは
+    # 症状が出ないので、環境差として静かに紛れ込む。
+    #
+    # 読むのは --exclude-standard を通ったファイルだけ。ただし ls-files はディレクトリを
+    # 畳まず配下を全部列挙するので、**無視設定に入っていない大きな未追跡ディレクトリ
+    # (node_modules 等) があると毎ラウンド全ファイルを読む**。実測で未追跡 5000 件が
+    # 署名 64ms → 206ms。無視設定に入れれば列挙されない。
+    #
+    # 空判定を先に行うのは、xargs が空入力でも cksum を起動する実装 (GNU) があり、
+    # 引数なしの cksum が標準入力を読みにいくため。macOS/BSD は空入力では起動せず、
+    # `-r` は GNU 由来で BSD では no-op として受理される。どちらでも同じ挙動にする。
+    untracked_n=$(git ls-files --others --exclude-standard -- . "$own" "$own_goal" 2>/dev/null |
+      wc -l | tr -d ' ')
+    if [ "${untracked_n:-0}" -gt 0 ]; then
+      git ls-files -z --others --exclude-standard -- . "$own" "$own_goal" 2>/dev/null |
+        xargs -0 cksum 2>/dev/null
     fi
   } 2>/dev/null | cksum | tr -d ' ')
   last_sig=$(get_field last_sig)

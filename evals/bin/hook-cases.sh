@@ -443,6 +443,14 @@ goal-l1-round-consumed)
     [ "$(goal_field status)" = "stalled" ] && break
   done
   [ "$(goal_field status)" = "stalled" ] || ng "赤いまま回り続けて止まらない (round=$(goal_field round))"
+  # **どの経路で止まったかまで見る**。status だけを見ると、無進捗検知が過敏に戻って
+  # ラウンド上限に到達しなくなっても黙って PASS する(実際、未追跡ファイルの内容を
+  # 署名に含める前はこのケースは無進捗経路で止まっており、名前が主張する経路を
+  # 一度も通っていなかった)
+  [ "$(goal_field no_progress)" = "0" ] ||
+    ng "無進捗経路で止まっている (このケースはラウンド上限経路を見るためのもの)"
+  [ "$(goal_field round)" -gt 5 ] ||
+    ng "ラウンド上限を超えずに止まった (round=$(goal_field round))"
   ok "赤い L1 でもラウンドを消費し、上限で止まる"
   ;;
 
@@ -625,10 +633,24 @@ goal-no-progress-sees-untracked)
     ng "未追跡ファイルへの追記が前進として数えられていない (no_progress=$(goal_field no_progress))"
   [ "$(goal_field status)" = "active" ] || ng "前進しているのに止まった"
 
+  # **非 ASCII 名でも同じこと**。git は既定 (core.quotePath=true) でパスを C クォートして
+  # 出力するため、改行区切りで受け取ると実在しないパスになり内容が署名に入らない。
+  # このマシンのグローバル設定は quotePath=false なので、fixture で既定に固定して再現させる
+  # (そうしないと「私の環境でだけ動く」修正を通してしまう)。
+  git -C "$WORK" config core.quotePath true
+  echo "あ" >"$WORK/設計メモ.md"
+  goalgate >/dev/null 2>&1 || ng "日本語名ファイルの追加で exit が 0 でない"
+  [ "$(goal_field no_progress)" = "0" ] || ng "日本語名ファイルの追加が前進と数えられていない"
+
+  echo "い" >>"$WORK/設計メモ.md"
+  goalgate >/dev/null 2>&1 || ng "日本語名ファイルへの追記で exit が 0 でない"
+  [ "$(goal_field no_progress)" = "0" ] ||
+    ng "日本語名の未追跡ファイルへの追記が前進として数えられていない (git のパスのクォート)"
+
   # 何もしなければ従来どおり停滞として検知する (検知能力を失っていないこと)
   goalgate >/dev/null 2>&1
   [ "$(goal_field no_progress)" = "1" ] || ng "何もしていないのに前進と数えた"
-  ok "未追跡ファイルへの追記を前進として数える"
+  ok "未追跡ファイルへの追記を前進として数える (非 ASCII 名を含む)"
   ;;
 
 # 停止条件 4: ループ自身の記帳 (.claude/loop/) は「前進」に数えない
