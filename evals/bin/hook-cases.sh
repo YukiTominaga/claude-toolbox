@@ -632,6 +632,10 @@ max_minutes_per_run: 15
 ---
 EOF
   goalgate >/dev/null 2>&1
+  # 「書き込まない」の否定 assertion だけでは、何もしない hook でも PASS してしまう。
+  # hook が実際に起動したことを round で押さえてから否定を見る
+  [ "$(goal_field round)" = "1" ] ||
+    ng "hook が起動していない (round=$(goal_field round))"
   grep -qE '^max_minutes:' "$WORK/.claude/goal.md" &&
     ng "goal.md に max_minutes が書き込まれた (LOOP.md の宣言を読んでいる)"
   grep -qE '^started_epoch:' "$WORK/.claude/goal.md" &&

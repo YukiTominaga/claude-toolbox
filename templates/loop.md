@@ -56,7 +56,9 @@ issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue 
 
 ## 5. 停止条件 (stop rules)
 
-<!-- 3 層すべてを効かせる。単独の層に頼らない。
+<!-- 挙げた層すべてを効かせる。単独の層に頼らない。
+     goal-gate が駆動する内側ループの停止条件は done-check / 反復上限 / 無進捗 の 3 層。
+     予算は外側ループ (loop-guard.sh) の歯止めで、層数には数えない。
      経過時間による停止は crystal 本体で撤廃済み (docs/spec/budget-removal.md)。 -->
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`

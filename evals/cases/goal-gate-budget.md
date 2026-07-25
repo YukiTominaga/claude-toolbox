@@ -18,4 +18,6 @@ expect_output: ^OK:
 10 年前に始めた `started_epoch` と `max_minutes: 1` を**明示的に置いた** goal.md を与える。
 撤廃前の実装や、残骸フィールドを読んで止める実装ならここで `stalled` になって落ちる。
 `status: active` のままラウンドが進み、停止条件を抜けて L1 に到達すること
-(`calls_count` が 1)まで見ているので、「時間で止めない」を素通しでごまかせない。
+(`calls_count npm` が 0 より大きい。L1 は typecheck / lint / test で 3 回呼ぶ)まで見ている。
+`round == 1` が「hook が実際に走った」を、npm の呼び出しが「停止条件で抜けていない」を
+押さえているので、**何もしない hook でも早期 exit する hook でも PASS しない**。
