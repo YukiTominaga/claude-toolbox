@@ -185,10 +185,19 @@ if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
     jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null |
     tail -c 6000)
 fi
-gitinfo=$(git status --short 2>/dev/null | head -n 30)
+# 判定材料には**コミット済みの変更も含める**。auto-commit がターンごとに作業ツリーを
+# 空にするため、git status だけを渡すと判定器は「何もしていない」ように見えてしまい、
+# 完了しているのに未達と誤判定する(実測: 「smoke-a.txt が git status に表示されていない
+# ため確認できない」)。無進捗検知が HEAD を署名に含めているのと同じ理由。
+gitinfo=$( {
+  echo "### 作業ツリー (git status --short)"
+  git status --short 2>/dev/null | head -n 30
+  echo "### このゴールの開始以降のコミット (git log --name-status)"
+  git log --name-status --oneline -n 10 2>/dev/null | head -n 40
+} 2>/dev/null)
 conditions=$(awk '/^## 完了条件/{f=1;next} /^## /{f=0} f' "$GOAL")
 
-prompt="あなたはゴール達成の判定器です。以下の完了条件・直近の作業ログ・git status を読み、完了条件がすべて満たされたかを判定してください。
+prompt="あなたはゴール達成の判定器です。以下の完了条件・直近の作業ログ・git の状態を読み、完了条件がすべて満たされたかを判定してください。
 出力は次の JSON のみ。説明文・コードフェンスは一切付けないこと:
 {\"met\": true|false, \"unmet\": [\"未達の条件ID\"], \"reason\": \"簡潔な理由\"}
 判定できない条件・情報が足りない条件は未達として扱うこと。
@@ -199,7 +208,7 @@ ${conditions}
 ## 直近の作業ログ (assistant 出力の末尾)
 ${context}
 
-## git status --short
+## git の状態 (作業ツリーとコミット済みの変更)
 ${gitinfo}"
 
 # macOS には timeout が無い(GNU coreutils 同梱)。素のまま呼ぶと 127 で必ず失敗し、
