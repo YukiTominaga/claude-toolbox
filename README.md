@@ -69,7 +69,7 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
 
 | 構成要素 | crystal での実装 |
 |---|---|
-| automations(周期実行) | 対話中は組み込みの `/loop 30m /crystal:loop next`。無人は cron / launchd から `scripts/loop-run.sh` |
+| automations(周期実行) | 対話中は組み込みの `/loop <間隔> /crystal:loop next`。無人は cron / launchd から `scripts/loop-run.sh` |
 | worktrees(並列隔離) | **組み込みに委譲**。`LOOP.md` の契約から参照するだけ |
 | skills(プロジェクト知識) | `skills/` の 11 個 + `rules/` の自動注入 |
 | connectors(MCP) | **既存の接続に委譲**。`/crystal:loop refill` は GitHub MCP を使う |

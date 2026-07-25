@@ -96,7 +96,7 @@ jq -nc --arg ts "$(date -Iseconds)" --argjson c "$cost" --arg s "$subtype" \
   '{ts: $ts, event: "cost", cost_usd: $c, subtype: $s}' >>"$LEDGER" 2>/dev/null
 
 if [ "$status" -ne 0 ] || [ "$subtype" != "success" ]; then
-  # 途中で打ち切られたイテレーションを台帳に残す。予算上限やクラッシュで中断されると
+  # 途中で打ち切られたイテレーションを台帳に残す。ターン上限やクラッシュで中断されると
   # エージェントは手順 7 まで到達できず、台帳には cost 行しか残らない。
   # それだと次の周回が手順 0 で「前回 Q-7 が途中で切れた」ことを読めない。
   if [ -n "$head_id" ] && ! recorded_result; then

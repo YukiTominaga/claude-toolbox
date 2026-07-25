@@ -119,7 +119,7 @@ EOF
   ok "採番・メタ書式・discover との互換が期待どおり"
   ;;
 
-# 予算ゲート: LOOP.md が無ければ素通し(fail-open)
+# 実行ゲート: LOOP.md が無ければ素通し(fail-open)
 guard-open)
   guard >/dev/null || ng "LOOP.md 不在で素通ししていない"
   ok "LOOP.md 不在は fail-open"
@@ -185,7 +185,7 @@ EOF
   ok "--check は記録せず、実績値だけを返す"
   ;;
 
-# 予算ゲート: 金額では止めない。cost 行がいくら積まれていても実行を拒まない
+# 実行ゲート: 金額では止めない。cost 行がいくら積まれていても実行を拒まない
 guard-cost-never-blocks)
   write_loop <<'EOF'
 ---
@@ -200,12 +200,18 @@ EOF
   printf '{"ts":"%s","event":"cost","cost_usd":999}\n' "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
 
   out=$(guard --check) || ng "実費が積まれているだけで拒否した (金額で止めてはいけない)"
+  # **否定 assertion だけにしない**。「返さないこと」しか見ないケースは、ゲートが
+  # 何もしない no-op でも PASS する(実測: 空虚な eval は撤廃系のケースで生まれやすい)。
+  # ゲートが生きていることを肯定形で先に押さえる
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null || ng "ok:true が返っていない: $out"
+  printf '%s' "$out" | jq -e 'has("runs_today")' >/dev/null ||
+    ng "runs_today を返していない (ゲートが判定していない疑い): $out"
   printf '%s' "$out" | jq -e 'has("cost_today_usd")' >/dev/null && ng "実費を判定材料として返している"
   printf '%s' "$out" | jq -e 'has("cost_remaining_usd")' >/dev/null && ng "残り予算を返している"
   ok "金額では止めず、実費を判定材料にも使わない"
   ;;
 
-# 無人実行: 判定器を通った 1 イテレーション。実費を記録し、予算は 1 回だけ消費する
+# 無人実行: 判定器を通った 1 イテレーション。実費を記録し、start 行を 1 行だけ積む
 run-normal)
   write_loop <<'EOF'
 ---
@@ -286,7 +292,7 @@ EOF
   ok "打ち切られたイテレーションを台帳に残す"
   ;;
 
-# 予算ゲート: paused の間は動かない
+# 実行ゲート: paused の間は動かない
 guard-paused)
   write_loop <<'EOF'
 ---
@@ -312,7 +318,7 @@ log-recent)
   [ "$(printf '%s\n' "$out" | head -n1 | jq -r .item_id)" = "Q-3" ] || ng "新しい順になっていない"
   [ "$(printf '%s\n' "$out" | tail -n1 | jq -r .item_id)" = "Q-2" ] || ng "2 件目が Q-2 でない"
 
-  # 予算の集計用の行 (start / cost) は混ざらない。
+  # 集計用の行 (start / cost) は混ざらない。
   # 除外リスト方式だと行種を足すたびに読み側が壊れるので、両方を明示的に見る
   printf '{"ts":"2026-01-01T00:00:00+09:00","event":"start"}\n' >>"$WORK/.claude/loop/run-log.jsonl"
   printf '{"ts":"2026-01-01T00:00:00+09:00","event":"cost","cost_usd":1.25}\n' >>"$WORK/.claude/loop/run-log.jsonl"

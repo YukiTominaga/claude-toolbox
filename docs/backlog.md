@@ -34,7 +34,7 @@
 - [x] Q-8: 未追跡ファイルへの追記が無進捗検知に映らない問題に対処する (S-4)  <!-- priority: med -->
 - [x] Q-11: LOOP.md の作業範囲に docs/ と LOOP.md 本文を含め、frontmatter の予算と status の変更をゲート節に明記する  <!-- priority: high -->
 - [x] Q-23: 内側ループの時間予算 (max_minutes_per_run) を撤廃し、停止条件を 3 層に詰める  <!-- spec: docs/spec/budget-removal.md, priority: high -->
-- [ ] Q-24: 外側ループの回数予算を撤廃し、無人実行のターン上限を LOOP.md の宣言から定数に移す  <!-- spec: docs/spec/budget-removal.md, priority: high -->
+- [x] Q-24: 外側ループの回数予算を撤廃し、無人実行のターン上限を LOOP.md の宣言から定数に移す  <!-- spec: docs/spec/budget-removal.md, priority: high -->
 - [ ] Q-19: stop-gate の差し戻しカウントの書き込みを原子的にする  <!-- priority: med -->
 - [ ] Q-17: rubric 型 eval が timeout 不在の環境で必ず SKIP になる問題を直す  <!-- priority: med -->
 - [ ] Q-16: 仕様のステータス表記を統一し、approved の自動インポートを機能させる  <!-- priority: med -->

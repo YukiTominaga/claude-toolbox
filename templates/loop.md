@@ -15,7 +15,7 @@ issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue 
 
 <!-- いつ回るか。手動から始め、段階的に上げる:
      - 手動:   必要なときに /crystal:loop next を叩く
-     - 対話中: /loop 30m /crystal:loop next (組み込みの /loop に委譲)
+     - 対話中: /loop <間隔> /crystal:loop next (組み込みの /loop に委譲)
      - 無人:   cron / launchd から ./scripts/loop-run.sh (登録は人が行う)
 
      **昇格の条件はその場で判定できる形で書くこと**。「実績ができたら」のような
