@@ -22,6 +22,7 @@
 
 - Q-9: project-checks.sh の署名メモ化 — 二重実行自体は事実だが、eval スイート 50 ケースの実測が 1 回 17 秒。往復ラウンドで 2 回走っても 34 秒で、max_minutes_per_run: 30 に対して無視できる。スイートが数分規模になったら積み直す
 - Q-18: .claude/settings.local.json の死んだ allow ルール掃除 — gitignore 対象なので無進捗署名に映らず、内側ループが 2 ラウンド目に stalled で落ちる。eval も書けず、かつ Bash の許可リストなのでループに編集させると自己権限付与の経路になる。人が手で行う
+- Q-12: 予算ゲートの迂回経路をなくし、台帳の実行回数を実イテレーション数と一致させる — Q-23/Q-24 で予算ゲート自体を撤廃したため前半は対象が消滅した (loop-guard.sh が止めるのは status: paused だけ)。後半は S-6 の修正 (loop-run.sh を --check にする) で解消済みで、eval run-normal が「1 イテレーション = start 行 1 行」を固定している。手順 1 を飛ばすと start 行が落ちる経路は構造的に残るが、回数で止めなくなったので台帳は観測用の記録にすぎず害が無い
 
 # バックログ
 - [x] Q-1: 記録先を整理し docs/signals/ を発見の置き場に一本化する  <!-- priority: high -->
@@ -38,7 +39,6 @@
 - [ ] Q-19: stop-gate の差し戻しカウントの書き込みを原子的にする  <!-- priority: med -->
 - [ ] Q-17: rubric 型 eval が timeout 不在の環境で必ず SKIP になる問題を直す  <!-- priority: med -->
 - [ ] Q-16: 仕様のステータス表記を統一し、approved の自動インポートを機能させる  <!-- priority: med -->
-- [ ] Q-12: 予算ゲートを迂回できる経路をなくし、台帳の実行回数を実イテレーション数と一致させる  <!-- priority: high -->
 - [ ] Q-13: Stop hook の実行順に依存しない形で、auto-commit と他の Stop hook の競合を防ぐ  <!-- priority: high -->
 - [ ] Q-14: 無人実行の初回登録がログを残さず空振りする問題を直す  <!-- priority: med -->
 - [ ] Q-15: 無人化への昇格条件を、達成可能かつその場で判定できる形に直す  <!-- priority: med -->
