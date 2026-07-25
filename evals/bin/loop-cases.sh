@@ -21,6 +21,7 @@ ng() {
 }
 
 next() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-next.sh" "$@"; }
+add() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-add.sh" "$@" 2>/dev/null; }
 guard() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" "$@"; }
 loglog() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" "$@"; }
 goalgate() {
@@ -99,6 +100,35 @@ EOF
   next >/dev/null 2>&1
   [ "$?" -eq 3 ] || ng "キューファイル不在時の exit が 3 でない"
   ok "キュー枯渇・不在ともに exit 3"
+  ;;
+
+# 追記: 採番が既存の Q-<n> の最大値+1 になり、書式が loop-next.sh でパースできる
+add-numbering)
+  add "キューが無いとき" >/dev/null 2>&1
+  [ "$?" -eq 3 ] || ng "キューファイル不在時の exit が 3 でない"
+
+  write_queue <<'EOF'
+# バックログ
+EOF
+  [ "$(add "最初のタスク")" = "Q-1" ] || ng "空のキューで Q-1 にならない"
+  [ "$(add "2件目" "docs/spec/foo.md")" = "Q-2" ] || ng "連番が Q-2 にならない"
+
+  # GH-<n> は Issue 番号なので採番に影響してはいけない
+  printf -- '- [x] Q-7: 済んだやつ\n- [ ] GH-42: issue 由来\n' >>"$WORK/docs/backlog.md"
+  [ "$(add "続き" "" high)" = "Q-8" ] || ng "GH- を除いた最大値+1 になっていない"
+
+  grep -qE '^- \[ \] Q-2: 2件目 +<!-- spec: docs/spec/foo\.md -->$' "$WORK/docs/backlog.md" ||
+    ng "spec のメタデータが行末コメントに入っていない"
+  grep -qE '^- \[ \] Q-1: 最初のタスク$' "$WORK/docs/backlog.md" ||
+    ng "メタ無指定なのにコメントが付いている"
+
+  add "不正な優先度" "" urgent >/dev/null 2>&1
+  [ "$?" -eq 1 ] || ng "不正な priority を受け付けた"
+
+  # 追記した行を discover 側が読めること(書式の後方互換)
+  out=$(next) || ng "追記後の backlog を loop-next.sh がパースできない"
+  [ "$(printf '%s' "$out" | jq -r .id)" = "Q-1" ] || ng "先頭が Q-1 でない: $out"
+  ok "採番・メタ書式・discover との互換が期待どおり"
   ;;
 
 # 予算ゲート: LOOP.md が無ければ素通し(fail-open)
