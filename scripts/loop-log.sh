@@ -25,9 +25,11 @@ if [ "${1:-}" = "--recent" ]; then
   n="${2:-5}"
   case "$n" in '' | *[!0-9]*) n=5 ;; esac
   [ -f "$LEDGER" ] || exit 0
-  # start 行は予算の集計用なので出さない。結果行だけを新しい順に返す。
+  # **結果行だけ**を新しい順に返す。台帳には予算の集計用の行 (start / cost) も混ざるが、
+  # それらは作業の履歴ではない。除外リストではなく `.result` の有無で選ぶ:
+  # 行種を足すたびに読み側を直す必要が出ると、必ずどこかで直し忘れる。
   # 逆順は awk で行う (tail -r は BSD 専用、tac は GNU 専用で環境を選ぶ)
-  grep -v '"event":"start"' "$LEDGER" 2>/dev/null | tail -n "$n" |
+  jq -c 'select(.result != null)' "$LEDGER" 2>/dev/null | tail -n "$n" |
     awk '{a[NR]=$0} END {for (i = NR; i > 0; i--) print a[i]}'
   exit 0
 fi

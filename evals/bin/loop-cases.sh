@@ -28,6 +28,24 @@ add() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-add.sh" "$@" 2>/dev/null;
 guard() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" "$@"; }
 loglog() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" "$@"; }
 signal() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/signal-add.sh" "$@" 2>/dev/null; }
+run() { CLAUDE_PROJECT_DIR="$WORK" CRYSTAL_LOOP_CMD="$WORK/bin/loopcmd" "$ROOT/scripts/loop-run.sh"; }
+
+# 無人ループの中身 (claude -p) を差し替えるスタブ。
+# $1 = judged | unjudged  判定器を通したかどうかを模す
+stub_loop_cmd() {
+  mkdir -p "$WORK/bin" "$WORK/.claude/loop"
+  cat >"$WORK/bin/loopcmd" <<EOF
+#!/bin/bash
+# エージェントが 1 イテレーションを終えた状態を作る
+CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" >/dev/null 2>&1
+CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" Q-1 done 1 "スタブ" >/dev/null 2>&1
+if [ "$1" = "judged" ]; then
+  echo '{"round":1,"met":true}' >>"$WORK/.claude/loop/judge-log.jsonl"
+fi
+printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1.25}'
+EOF
+  chmod +x "$WORK/bin/loopcmd"
+}
 
 write_queue() {
   mkdir -p "$WORK/docs"
@@ -183,6 +201,53 @@ EOF
   ok "実費の上限を台帳の合計で判定する"
   ;;
 
+# 無人実行: 判定器を通った 1 イテレーション。実費を記録し、予算は 1 回だけ消費する
+run-normal)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 30
+max_cost_usd_per_day: 5.0
+---
+EOF
+  stub_loop_cmd judged
+  out=$(run) || ng "正常な 1 イテレーションで exit が 0 でない: $out"
+  printf '%s' "$out" | grep -q '判定 1 回' || ng "判定回数が報告されていない: $out"
+
+  ledger="$WORK/.claude/loop/run-log.jsonl"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] ||
+    ng "1 イテレーションで予算を $(grep -c '"event":"start"' "$ledger") 回消費した (ゲートの二重通過)"
+  [ "$(grep -c '"event":"cost"' "$ledger")" -eq 1 ] || ng "実費が記録されていない"
+  grep '"event":"cost"' "$ledger" | jq -e '.cost_usd == 1.25' >/dev/null || ng "実費の値が違う"
+
+  # 消費した実費が次回の残り予算に反映される
+  guard --check | jq -e '(.cost_remaining_usd - 3.75) | fabs < 0.001' >/dev/null ||
+    ng "残り予算に反映されていない"
+  ok "実費を記録し、予算を 1 回だけ消費する"
+  ;;
+
+# 無人実行: done と報告されたのに判定器が動いていないイテレーションを検出する
+run-detects-unjudged)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 8
+max_minutes_per_run: 30
+---
+EOF
+  stub_loop_cmd unjudged
+  out=$(run 2>&1) && ng "内側ループが素通しされたのに成功として扱った"
+  printf '%s' "$out" | grep -q '内側ループが動いていない' || ng "理由が報告されていない: $out"
+
+  # 次のイテレーションが手順 0 で読めるよう、台帳に failed が残る
+  last=$(loglog --recent 1)
+  [ "$(printf '%s' "$last" | jq -r .result)" = "failed" ] ||
+    ng "台帳に failed が残っていない: $last"
+  [ "$(printf '%s' "$last" | jq -r .item_id)" = "Q-1" ] || ng "item_id が引き継がれていない"
+  ok "判定器を通らなかったイテレーションを検出して failed に落とす"
+  ;;
+
 # 予算ゲート: paused の間は動かない
 guard-paused)
   write_loop <<'EOF'
@@ -209,9 +274,12 @@ log-recent)
   [ "$(printf '%s\n' "$out" | head -n1 | jq -r .item_id)" = "Q-3" ] || ng "新しい順になっていない"
   [ "$(printf '%s\n' "$out" | tail -n1 | jq -r .item_id)" = "Q-2" ] || ng "2 件目が Q-2 でない"
 
-  # start 行 (予算の集計用) は混ざらない
+  # 予算の集計用の行 (start / cost) は混ざらない。
+  # 除外リスト方式だと行種を足すたびに読み側が壊れるので、両方を明示的に見る
   printf '{"ts":"2026-01-01T00:00:00+09:00","event":"start"}\n' >>"$WORK/.claude/loop/run-log.jsonl"
+  printf '{"ts":"2026-01-01T00:00:00+09:00","event":"cost","cost_usd":1.25}\n' >>"$WORK/.claude/loop/run-log.jsonl"
   loglog --recent 10 | grep -q '"event":"start"' && ng "start 行が混ざっている"
+  loglog --recent 10 | grep -q '"event":"cost"' && ng "cost 行が混ざっている"
 
   [ "$(loglog --recent | wc -l | tr -d ' ')" -eq 3 ] || ng "既定件数が 5 になっていない"
   ok "--recent が結果行だけを新しい順に返す"

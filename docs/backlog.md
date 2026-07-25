@@ -20,3 +20,7 @@
 - [x] Q-4: open/closed の用語衝突を解消する  <!-- priority: med -->
 - [x] Q-5: 無人実行のエントリポイントと実費予算を用意する  <!-- priority: high -->
 - [x] Q-6: README の Loop Engineering 節に、記録先4つの表を追記する  <!-- priority: med -->
+- [ ] Q-7: goal.md の無いセッションで、押し戻し後に stop-gate が二度と検証しない穴を塞ぐ  <!-- priority: high -->
+- [ ] Q-8: 未追跡ファイルへの追記が無進捗検知に映らない問題に対処する (S-4)  <!-- priority: med -->
+- [ ] Q-9: project-checks.sh の署名メモ化 (スイートが重い場合の二重実行対策)  <!-- priority: low -->
+- [ ] Q-10: get_field の 4 実装に、なぜその正規表現かを 1 行コメントで残す  <!-- priority: low -->

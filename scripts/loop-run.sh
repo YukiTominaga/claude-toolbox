@@ -42,17 +42,30 @@ case "$budget" in
 esac
 
 LEDGER=".claude/loop/run-log.jsonl"
+JUDGE_LOG=".claude/loop/judge-log.jsonl"
 out=$(mktemp) || exit 1
 trap 'rm -f "$out"' EXIT
+
+# 実行前の判定回数を控える。内側ループが本当に回ったかを後で照合する
+judge_before=$(wc -l <"$JUDGE_LOG" 2>/dev/null | tr -d ' ')
+case "$judge_before" in '' | *[!0-9]*) judge_before=0 ;; esac
 
 # CRYSTAL_UNATTENDED=1 は 2 つの意味を持つ:
 #   pre-bash-guard がゲート該当コマンド (PR 作成・マージ・依存追加) を deny する
 #   /crystal:loop next がキュー枯渇時に signal を勝手に昇格させない
-# shellcheck disable=SC2086
-CRYSTAL_UNATTENDED=1 claude -p "/crystal:loop next" \
-  --output-format json --no-session-persistence $budget_arg \
-  >"$out" 2>/dev/null
-status=$?
+#
+# CRYSTAL_LOOP_CMD で中身を差し替えられる(eval が課金せずにこのスクリプト自身を検証する)。
+if [ -n "${CRYSTAL_LOOP_CMD:-}" ]; then
+  # shellcheck disable=SC2086
+  CRYSTAL_UNATTENDED=1 $CRYSTAL_LOOP_CMD >"$out" 2>/dev/null
+  status=$?
+else
+  # shellcheck disable=SC2086
+  CRYSTAL_UNATTENDED=1 claude -p "/crystal:loop next" \
+    --output-format json --no-session-persistence $budget_arg \
+    >"$out" 2>/dev/null
+  status=$?
+fi
 
 cost=$(jq -r '.total_cost_usd // 0' "$out" 2>/dev/null)
 case "$cost" in '' | null) cost=0 ;; esac
@@ -69,4 +82,23 @@ if [ "$status" -ne 0 ] || [ "$subtype" != "success" ]; then
   exit 1
 fi
 
-echo "loop-run: 1 イテレーション完了 (cost=\$$cost)"
+# --- 内側ループが本当に回ったかを照合する ---
+# 「done と報告されたが判定器が一度も動いていない」= goal-gate を通らずに自己採点しただけ。
+# エージェントが goal.md を作らなかった、実装後に作った、自分で done に書き換えた場合に起きる。
+# 手順書で禁じてはいるが指示は強制ではないので、無人実行では機械的に検出する
+# (対話セッションでは人がその場で気づけるため、ここでは扱わない)。
+judge_after=$(wc -l <"$JUDGE_LOG" 2>/dev/null | tr -d ' ')
+case "$judge_after" in '' | *[!0-9]*) judge_after=0 ;; esac
+
+last=$("$ROOT/scripts/loop-log.sh" --recent 1 2>/dev/null)
+last_result=$(printf '%s' "$last" | jq -r '.result // empty' 2>/dev/null)
+last_id=$(printf '%s' "$last" | jq -r '.item_id // empty' 2>/dev/null)
+
+if [ "$last_result" = "done" ] && [ "$judge_after" -le "$judge_before" ]; then
+  msg="内側ループが動いていない: done と記録されたが判定器が一度も判定していない。自己採点のみ"
+  [ -n "$last_id" ] && "$ROOT/scripts/loop-log.sh" "$last_id" failed 0 "$msg" >/dev/null 2>&1
+  echo "loop-run: $msg (cost=\$$cost)" >&2
+  exit 1
+fi
+
+echo "loop-run: 1 イテレーション完了 (cost=\$$cost, 判定 $((judge_after - judge_before)) 回)"
