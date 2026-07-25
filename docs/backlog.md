@@ -46,3 +46,4 @@
 - [ ] Q-20: hooks.json の MultiEdit matcher が現行 Claude Code に存在しないツールを指している問題を直す  <!-- priority: low -->
 - [ ] Q-10: frontmatter を読む 5 つのパーサ (get_field 3 + goal_field 2) に、なぜその正規表現かを 1 行コメントで残す  <!-- priority: low -->
 - [ ] Q-21: README と実装の食い違いを解消する (hook 本数・scripts 一覧・stop-gate 説明・台帳の書き手、および「一括 add は git-workflow.md の禁止に対する例外」という誤り — 同じ誤りが hooks/auto-commit.sh のコメントにもあるので両方直す)  <!-- priority: low -->
+- [ ] Q-25: LOOP.md の作業範囲に .claude/ 配下のパス別の扱いを書く  <!-- priority: med -->
