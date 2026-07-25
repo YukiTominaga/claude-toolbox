@@ -6,7 +6,6 @@ no_progress: 0
 max_no_progress: 2
 last_sig:
 started_epoch:
-max_minutes: 60
 created: YYYY-MM-DD
 spec:
 ---
@@ -26,7 +25,9 @@ spec:
        max_no_progress: [停止条件 4] 差分が変わらないラウンドがこの回数続いたら status: stalled
        last_sig:        直近ラウンドの作業ツリー差分の署名。hook が更新する。手動で編集しない
        started_epoch:   初回ラウンドで hook が打刻する開始時刻 (epoch 秒)。手動で編集しない
-       max_minutes:     [停止条件 3] 開始からこの分数を超えたら status: stalled
+       max_minutes:     [停止条件 3] 開始からこの分数が経ったら status: stalled。
+                        **書かないこと** — hook が LOOP.md の max_minutes_per_run
+                        (無ければ 60) で埋める。ここに書くと LOOP.md の宣言より優先される
        spec:            取り込み元の仕様ファイル(任意) 例: docs/spec/foo.md
      [停止条件 1] は完了条件をすべて満たしたと判定されること (status: done)。 -->
 

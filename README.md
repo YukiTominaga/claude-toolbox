@@ -187,7 +187,7 @@ Haiku で達成判定し、未達なら差し戻す。
   |---|---|---|
   | 1. 達成 | 完了条件をすべて満たしたと判定 | `status: done` |
   | 2. 反復上限 | `round > max_rounds`(既定 5) | `status: stalled` |
-  | 3. 予算 | 開始からの経過が `max_minutes`(既定 60)超 | `status: stalled` |
+  | 3. 予算 | 開始からの経過が `max_minutes` 以上(既定は `LOOP.md` の `max_minutes_per_run`、無ければ 60) | `status: stalled` |
   | 4. 無進捗 | 差分が変わらないラウンドが `max_no_progress`(既定 2)回連続 | `status: stalled` |
 
   無進捗のラウンドでは判定器を呼ばずに差し戻すため、止まっている間の課金も抑えられる。

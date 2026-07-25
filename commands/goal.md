@@ -49,12 +49,14 @@ goal-gate hook が Haiku で完了条件の達成を判定し、未達なら差�
    判定できず、ラウンド上限まで回り続けて費用だけが出る
 4. 停止条件の上限をユーザーに確認する:
    - `max_rounds`(判定回数の上限、既定 5)
-   - `max_minutes`(開始からの経過時間の上限、既定 60)。`LOOP.md` があれば
-     その `max_minutes_per_run` を既定値として提案する
+   - `max_minutes`(開始からの経過時間の上限)。**通常は確認せず書かない** —
+     goal-gate が `LOOP.md` の `max_minutes_per_run`(無ければ 60)で自動で埋める。
+     LOOP.md の宣言と違う値にしたいときだけ、ユーザーに確認して明示する
    - `max_no_progress`(差分が変わらないラウンドの許容回数、既定 2)は通常そのままでよい
 5. テンプレート(templates/goal.md)の形式で `.claude/goal.md` を作成する。
    `round: 0`、`no_progress: 0`、`status: active`、`created:` は今日の日付。
-   `last_sig` と `started_epoch` は**空のままにする**(goal-gate が自動で埋める)
+   `last_sig` と `started_epoch` は**空のままにする**(goal-gate が自動で埋める)。
+   `max_minutes` は**行ごと書かない**(同上。書くと `LOOP.md` の宣言より優先される)
 6. `.claude/goal.md` が `.gitignore` に含まれていなければ追加を提案する
    (untracked のままだと stop-gate の「変更なし判定」を汚染するため)
 7. 最後に宣言する: 「以降、応答完了のたびに Haiku が達成判定を行い、未達なら
