@@ -9,7 +9,7 @@
 | `skills/` | 自作スキル 11 個 |
 | `agents/` | `spec-critic`, `verifier` |
 | `commands/` | `/learn`, `/spec`, `/goal`, `/eval`, `/loop` |
-| `hooks/` | `hooks.json` + スクリプト 8 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / session-rules / audit-config) |
+| `hooks/` | `hooks.json` + スクリプト 9 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / auto-commit / session-rules / audit-config) |
 | `scripts/` | 手動実行系スクリプト(`eval-run.sh`, `loop-add.sh`, `loop-next.sh`, `loop-guard.sh`, `loop-log.sh`) |
 | `rules/` | コーディング規約・テスト方針・検証ラダーなど(SessionStart hook `session-rules.sh` が全セッションに自動注入) |
 | `templates/` | spec / lessons / goal / eval-case / loop / backlog テンプレート |
@@ -141,6 +141,23 @@ Haiku で達成判定し、未達なら差し戻す。
 - 判定履歴は `~/.claude/logs/goal-gate.jsonl` に残る(/learn の素材)
 - `.claude/goal.md` は `.gitignore` に追加すること(untracked のままだと stop-gate の
   「変更なし判定」を汚染する)。`/crystal:goal` が追加を提案する
+
+## 作業中の変更を自動コミット (auto-commit)
+
+「気づいたら未コミット」を無くすための Stop hook。応答が素直に終わったとき、
+その時点の変更を feature ブランチに 1 コミットとして落とす。**設定不要で全リポジトリに効く**。
+
+- **動かない場面**(いずれも無条件でスキップ):
+  `main` / `master` / detached HEAD、rebase・merge・cherry-pick・revert・bisect の途中、
+  git 管理下でない場合、変更が無い場合、差し戻しの往復中(`stop_hook_active`)
+- **未追跡ファイルも含める**(`git add -A` 相当)。新規作成したファイルこそ取りこぼしやすいため。
+  これは `rules/git-workflow.md` の一括 add 禁止に対する**明示的な例外**として同ファイルに記載している
+- **機密パスの検出で中止**: `.env` / `*.pem` / `*.key` / `id_rsa` / `credentials` / `.ssh/` /
+  `.aws/` などに一致するパスが対象に入っていたらコミットせず、`systemMessage` で知らせる。
+  `.gitignore` に追加すれば通常どおり動く
+- **コミットメッセージは Haiku が差分から生成**する(Conventional Commits 形式)。
+  CLI 不在・失敗時は `chore: 自動コミット (N files: ...)` にフォールバックして必ずコミットする
+- 生成されるのは作業途中のコミットなので、レビュー前に `--amend` や squash で整えることを前提とする
 
 ## Eval Engineering
 
