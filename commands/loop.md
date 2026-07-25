@@ -56,7 +56,10 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 
 1. `LOOP.md` がなければ `${CLAUDE_PLUGIN_ROOT}/templates/loop.md` を雛形として作成する。
    トリガー・スコープ・ゲートの各節はユーザーに確認しながら埋める(空のまま残さない)
-2. `docs/backlog.md` がなければ `${CLAUDE_PLUGIN_ROOT}/templates/backlog.md` を雛形として作成する
+2. `docs/backlog.md` がなければ `${CLAUDE_PLUGIN_ROOT}/templates/backlog.md` を雛形として作成する。
+   **テンプレートの例示行(`Q-1: <一行で書ける粒度のタスク>` など)は必ず削除し、
+   キューは空の状態で作る**(残すと `loop-next.sh` が例示行を実在のタスクとして返し、
+   `loop-add.sh` の採番もずれる)
 3. `.gitignore` に `.claude/loop/` がなければ追加を提案する(台帳はローカルの実行履歴であり、
    untracked のままだと stop-gate の「変更なし判定」を汚染するため)
 4. 作成したファイルと、次に実行するコマンド(`/crystal:loop next`)を報告する
