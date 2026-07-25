@@ -46,8 +46,12 @@ get_field() {
 status=$(get_field status)
 max_runs=$(get_field max_runs_per_day)
 max_minutes=$(get_field max_minutes_per_run)
+max_cost=$(get_field max_cost_usd_per_day)
 case "$max_runs" in '' | *[!0-9]*) max_runs=8 ;; esac
 case "$max_minutes" in '' | *[!0-9]*) max_minutes=30 ;; esac
+# 実費の上限は任意。未設定なら回数と時間による近似だけで判定する
+# (対話セッションではコストを観測できないため、そこでは常に未設定になる)
+case "$max_cost" in *[!0-9.]* | '') max_cost="" ;; esac
 
 if [ -n "$status" ] && [ "$status" != "active" ]; then
   jq -nc --arg s "$status" '{ok:false, reason:("LOOP.md が status: " + $s)}'
@@ -68,6 +72,27 @@ if [ "$runs_today" -ge "$max_runs" ]; then
   exit 1
 fi
 
+# --- 実費の上限 (無人実行のみ観測できる) ---
+# 台帳の cost 行は loop-run.sh が実行のたびに積む。失敗した実行のコストも含める:
+# 含めないと、失敗を繰り返すループが無限に課金できてしまう。
+cost_today=0
+cost_remaining=""
+if [ -n "$max_cost" ]; then
+  if [ -f "$LEDGER" ]; then
+    cost_today=$(grep "\"ts\":\"$today.*\"event\":\"cost\"" "$LEDGER" 2>/dev/null |
+      jq -s 'map(.cost_usd // 0) | add // 0' 2>/dev/null) || cost_today=0
+  fi
+  case "$cost_today" in '' | null) cost_today=0 ;; esac
+  # 小数の比較はシェルでできないので awk に任せる
+  if awk -v a="$cost_today" -v b="$max_cost" 'BEGIN { exit !(a >= b) }'; then
+    jq -nc --argjson c "$cost_today" --argjson m "$max_cost" \
+      '{ok:false, cost_today_usd:$c, max_cost_usd_per_day:$m,
+        reason:"本日の実費が上限に達しました"}'
+    exit 1
+  fi
+  cost_remaining=$(awk -v a="$cost_today" -v b="$max_cost" 'BEGIN { printf "%.4f", b - a }')
+fi
+
 if [ "$check_only" -eq 0 ]; then
   if mkdir -p "$LEDGER_DIR" 2>/dev/null; then
     jq -nc --arg ts "$(date -Iseconds)" '{ts: $ts, event: "start"}' >>"$LEDGER" 2>/dev/null
@@ -76,6 +101,8 @@ if [ "$check_only" -eq 0 ]; then
 fi
 
 jq -nc --argjson r "$runs_today" --argjson m "$max_runs" --argjson t "$max_minutes" \
-  --argjson c "$check_only" \
-  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t, recorded:($c==0)}'
+  --argjson c "$check_only" --argjson ct "$cost_today" --arg rem "$cost_remaining" \
+  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t, recorded:($c==0),
+    cost_today_usd:$ct}
+   + (if $rem == "" then {} else {cost_remaining_usd:($rem|tonumber)} end)'
 exit 0

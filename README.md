@@ -69,7 +69,7 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
 
 | 構成要素 | crystal での実装 |
 |---|---|
-| automations(周期実行) | **組み込みに委譲**。`/loop 30m /crystal:loop next` または Routines から呼ぶ |
+| automations(周期実行) | 対話中は組み込みの `/loop 30m /crystal:loop next`。無人は cron / launchd から `scripts/loop-run.sh` |
 | worktrees(並列隔離) | **組み込みに委譲**。`LOOP.md` の契約から参照するだけ |
 | skills(プロジェクト知識) | `skills/` の 11 個 + `rules/` の自動注入 |
 | connectors(MCP) | **既存の接続に委譲**。`/crystal:loop refill` は GitHub MCP を使う |
@@ -83,11 +83,13 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
   `scripts/loop-next.sh` が先頭の未着手項目を 1 件だけ返す(枯渇時は exit 3)。
   追記は `scripts/loop-add.sh` が採番するので、行を手で書かない。
   GitHub Issues は `/crystal:loop refill` で backlog に取り込む
-- **予算**: `LOOP.md` の `max_runs_per_day` / `max_minutes_per_run`。
+- **予算**: `LOOP.md` の `max_runs_per_day` / `max_minutes_per_run` / `max_cost_usd_per_day`。
   `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が台帳に記録する**
   (消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
   状態を見るだけの `--check` は記録しない。
-  トークン課金額はシェルから観測できないため、回数と時間で代替している
+  **実費は無人実行でのみ観測できる** — `loop-run.sh` が `claude -p --output-format json` の
+  `total_cost_usd` を台帳に積み、ゲートがその日の合計で判定する。対話セッションでは
+  コストを観測できないので、回数と時間による近似だけが効く
 - **作業ブランチ**: `next` は項目ごとに `loop/<id>` ブランチを作って作業する。
   `main` のままだと `main` 直接コミット禁止と auto-commit の main スキップが重なり、
   **作業が一切コミットされない**ため
@@ -121,6 +123,30 @@ backlog の1行 ──(取り出す)──> spec(境界と AC-* を固める)
   `/crystal:loop next` が内部で呼ぶ
 
 `.claude/loop/` は `.gitignore` に追加すること(`/crystal:loop init` が提案する)。
+
+### 無人実行
+
+`scripts/loop-run.sh` が 1 イテレーションを無人で回す。`claude -p "/crystal:loop next"` を
+**新しいプロセスで**起動する。理由は 2 つある:
+
+- プラグインはキャッシュへの実コピーで、hooks はセッション開始時に固定される。
+  **同じセッション内でループの改修をドッグフーディングすることは原理的にできない**
+- cloud の Routines はローカルのリポジトリにも MCP にも触れない。ローカルリポジトリを
+  触るループの無人化は、cron / launchd + `claude -p` が現実的な形になる
+
+`CRYSTAL_UNATTENDED=1` が立ち、次の 2 つが変わる:
+
+- `pre-bash-guard` が `LOOP.md` のゲートに当たる操作(PR の作成・マージ、依存の追加、
+  force push)を `deny` する。**無人では承認を待てないので、ゲートは「聞く」ではなく
+  「やらない」として実装する**
+- キューが枯れても signal を backlog に勝手に昇格させない(仕事を自分で作らない)
+
+登録は人が行う(これ自体がゲート)。例:
+
+```bash
+# 平日 9 時に 1 イテレーション
+0 9 * * 1-5 cd /path/to/repo && CLAUDE_PROJECT_DIR=$(pwd) ./scripts/loop-run.sh >> .claude/loop/cron.log 2>&1
+```
 
 ## ゴール達成自動判定 (goal-gate)
 

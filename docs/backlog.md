@@ -18,4 +18,4 @@
 - [x] Q-2: 台帳を loop next の冒頭で読み戻す (loop-log.sh --recent)  <!-- priority: high -->
 - [x] Q-3: 判定器を構造化出力にし、コストを記録し、スタブ可能にする  <!-- priority: med -->
 - [x] Q-4: open/closed の用語衝突を解消する  <!-- priority: med -->
-- [ ] Q-5: 無人実行のエントリポイントと実費予算を用意する  <!-- priority: high -->
+- [x] Q-5: 無人実行のエントリポイントと実費予算を用意する  <!-- priority: high -->

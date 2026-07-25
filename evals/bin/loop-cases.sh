@@ -138,6 +138,51 @@ EOF
   ok "--check は記録せず判定だけ返す"
   ;;
 
+# 予算ゲート: 実費の上限。無人実行が積んだ cost 行を合計して判定する
+guard-cost)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 99
+max_minutes_per_run: 30
+max_cost_usd_per_day: 5.0
+---
+EOF
+  out=$(guard --check) || ng "上限未達なのに拒否した"
+  printf '%s' "$out" | jq -e '.cost_today_usd == 0' >/dev/null || ng "cost_today_usd が 0 でない"
+  printf '%s' "$out" | jq -e '.cost_remaining_usd == 5' >/dev/null || ng "残り予算が返っていない"
+
+  mkdir -p "$WORK/.claude/loop"
+  ts=$(date -Iseconds)
+  printf '{"ts":"%s","event":"cost","cost_usd":3.2}\n{"ts":"%s","event":"cost","cost_usd":1.0}\n' \
+    "$ts" "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
+  out=$(guard --check) || ng "4.2/5.0 で拒否した"
+  printf '%s' "$out" | jq -e '.cost_today_usd == 4.2' >/dev/null || ng "合計が 4.2 でない"
+  printf '%s' "$out" | jq -e '(.cost_remaining_usd - 0.8) | fabs < 0.001' >/dev/null ||
+    ng "残りが 0.8 でない"
+
+  printf '{"ts":"%s","event":"cost","cost_usd":1.0}\n' "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
+  guard --check >/dev/null 2>&1 && ng "上限を超えても実行が許可された"
+
+  # 昨日のコストは今日の予算を食わない
+  printf '{"ts":"2020-01-01T00:00:00+09:00","event":"cost","cost_usd":99}\n' \
+    >>"$WORK/.claude/loop/run-log.jsonl"
+  out=$(guard --check 2>/dev/null)
+  printf '%s' "$out" | jq -e '.cost_today_usd == 5.2' >/dev/null || ng "他の日のコストを合計した"
+
+  # 上限が未設定なら実費では判定しない(対話セッションの構成)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 99
+max_minutes_per_run: 30
+---
+EOF
+  out=$(guard --check) || ng "上限未設定なのに拒否した"
+  printf '%s' "$out" | jq -e 'has("cost_remaining_usd")' >/dev/null && ng "未設定なのに残り予算を返した"
+  ok "実費の上限を台帳の合計で判定する"
+  ;;
+
 # 予算ゲート: paused の間は動かない
 guard-paused)
   write_loop <<'EOF'

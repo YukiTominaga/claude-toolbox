@@ -2,17 +2,24 @@
 status: active
 max_runs_per_day: 8
 max_minutes_per_run: 30
+max_cost_usd_per_day: 5.0
 issue_labels:
 ---
 # ループ契約
 
 ## 1. トリガー (cadence)
 
-**手動のみ**。必要なときに `/crystal:loop next` を手で叩く。周期実行は入れない。
+**現在は手動のみ**。必要なときに `/crystal:loop next` を手で叩く。
 
-bounded から始め、verifier が「自分が見つけたはずの失敗」を実際に検知した実績が
-できてから、対話セッション中の `/loop 30m /crystal:loop next` に上げる。
-無人実行はそのさらに後。
+昇格の条件は**その場で判定できる形**で書く。「実績ができたら」のような条件は
+verifier 自身が判定できず、いつまでも昇格しないか、根拠なく昇格するかのどちらかになる。
+
+| 段階 | 昇格に必要な条件(すべて満たすこと) |
+|---|---|
+| 手動 → 対話 `/loop 30m /crystal:loop next` | `.claude/loop/judge-log.jsonl` に `met:false` の行が 1 件以上ある(判定器が実際に差し戻した実績)。かつ `loop-log.sh --recent 3` が 3 件とも `done`。かつ `./scripts/loop-smoke.sh` が OK |
+| 対話 → 無人 `./scripts/loop-run.sh` | 対話で 5 回連続 `done`、かつその間に人間が介入したイテレーションが 0 件。かつ `max_cost_usd_per_day` を設定済み |
+
+無人実行の登録(cron / launchd)は**人が行う**。ループが自分でスケジュールを増やすことはしない。
 
 ## 2. 作業範囲 (bounded / unbounded)
 
@@ -67,7 +74,8 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
-- **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30`
+- **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30` / `max_cost_usd_per_day: 5.0`。
+  実費は無人実行 (`loop-run.sh`) でのみ観測できるので、対話セッションでは回数と時間だけが効く
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress`(既定 2)回続いたら `status: stalled`
 
 ## ゲート (人間承認が必要な操作)

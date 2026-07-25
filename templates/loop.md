@@ -5,16 +5,22 @@
 status: active            # active | paused (paused の間 /crystal:loop next は何もしない)
 max_runs_per_day: 8       # 予算: 1日の実行回数上限。超えたら loop-guard.sh が止める
 max_minutes_per_run: 30   # 予算: 1イテレーションの壁時計上限。goal.md の max_minutes の既定値になる
+max_cost_usd_per_day:     # 予算: 1日の実費上限 (USD)。無人実行 (loop-run.sh) でのみ効く。
+                          # 空なら回数と時間だけで判定する (対話セッションでは常にこちら)
 issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue のラベル (カンマ区切り)
 ---
 # ループ契約
 
 ## 1. トリガー (cadence)
 
-<!-- いつ回るか。実行そのものは組み込み機能に委譲する。例:
-     - 対話セッション中: /loop 30m /crystal:loop next
-     - 無人: Routines で平日 09:00 に /crystal:loop next
-     ここには「どの頻度で、いつまで回すか」を書く。 -->
+<!-- いつ回るか。手動から始め、段階的に上げる:
+     - 手動:   必要なときに /crystal:loop next を叩く
+     - 対話中: /loop 30m /crystal:loop next (組み込みの /loop に委譲)
+     - 無人:   cron / launchd から ./scripts/loop-run.sh (登録は人が行う)
+
+     **昇格の条件はその場で判定できる形で書くこと**。「実績ができたら」のような
+     条件は誰も判定できず、いつまでも昇格しないか根拠なく昇格するかになる。
+     例: 「判定履歴に met:false が 1 件以上あり、直近 3 件の結果がすべて done」 -->
 
 ## 2. 作業範囲 (bounded / unbounded)
 

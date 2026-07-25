@@ -126,12 +126,16 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 
 ## `refill` の場合
 
-**先に GitHub MCP のツール(`list_issues`)が使えるかを確認する。使えない場合は
-その旨を報告して終了する**(このセッションに GitHub の接続が無い、と伝える。
-ラベルを尋ねてから失敗させない)。
+**先に Issue の取得手段があるかを確認する。ラベルを尋ねてから失敗させない**:
 
-`LOOP.md` の frontmatter `issue_labels` を読み、GitHub MCP の `list_issues` で
-そのラベルの open な Issue を取得する(`issue_labels` が空ならユーザーにラベルを尋ねる)。
+1. GitHub MCP の `list_issues` が使えるならそれを使う
+2. 使えない場合は `gh` CLI にフォールバックする。`gh auth status` が通るなら
+   `gh issue list --label "<ラベル>" --state open --json number,title` を使う。
+   **無人実行 (`CRYSTAL_UNATTENDED=1`) では MCP が無いのでこちらが本線になる**
+3. どちらも使えなければ、その旨を報告して終了する
+
+`LOOP.md` の frontmatter `issue_labels` を読み、そのラベルの open な Issue を取得する
+(`issue_labels` が空の場合、対話中ならユーザーにラベルを尋ね、無人実行なら何もせず終了する)。
 `docs/backlog.md` に**まだ無いものだけ**を末尾に追記する:
 
 ```
