@@ -34,11 +34,23 @@ guard=$("$ROOT/scripts/loop-guard.sh" --check) || {
   exit 1
 }
 
+# --- 暴走の歯止め ---
+# ターン数で止める。**金額では止めない**: サブスクリプション(Max 等)では total_cost_usd は
+# トークン数から計算した参考値にすぎず、追加課金も発生しないので、金額を上限にしても
+# 意味のある歯止めにならない。ターン数なら課金形態に依存しない。
+# 正常なイテレーションでは発火しない値にすること(発火したら中断として扱われる)。
+turns=$(printf '%s' "$guard" | jq -r '.max_turns_per_run // empty')
+extra_args=""
+case "$turns" in
+'' | null) ;;
+*) extra_args="--max-turns $turns" ;;
+esac
+
+# 実費の上限が設定されている場合(API キー運用・CI)だけ、CLI 側にも渡す
 budget=$(printf '%s' "$guard" | jq -r '.cost_remaining_usd // empty')
-budget_arg=""
 case "$budget" in
-'' | null) ;; # 日次のドル上限が未設定なら CLI 側の上限は付けない
-*) budget_arg="--max-budget-usd $budget" ;;
+'' | null) ;;
+*) extra_args="$extra_args --max-budget-usd $budget" ;;
 esac
 
 LEDGER=".claude/loop/run-log.jsonl"
@@ -70,13 +82,14 @@ recorded_result() {
 #
 # CRYSTAL_LOOP_CMD で中身を差し替えられる(eval が課金せずにこのスクリプト自身を検証する)。
 if [ -n "${CRYSTAL_LOOP_CMD:-}" ]; then
+  # スタブにも同じ引数を渡す。渡さないと「どの上限で起動したか」を eval で確かめられない
   # shellcheck disable=SC2086
-  CRYSTAL_UNATTENDED=1 $CRYSTAL_LOOP_CMD >"$out" 2>/dev/null
+  CRYSTAL_UNATTENDED=1 $CRYSTAL_LOOP_CMD $extra_args >"$out" 2>/dev/null
   status=$?
 else
   # shellcheck disable=SC2086
   CRYSTAL_UNATTENDED=1 claude -p "/crystal:loop next" \
-    --output-format json --no-session-persistence $budget_arg \
+    --output-format json --no-session-persistence $extra_args \
     >"$out" 2>/dev/null
   status=$?
 fi

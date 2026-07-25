@@ -2,7 +2,8 @@
 status: active
 max_runs_per_day: 8
 max_minutes_per_run: 30
-max_cost_usd_per_day: 5.0
+max_turns_per_run: 300
+max_cost_usd_per_day:
 issue_labels:
 ---
 # ループ契約
@@ -74,8 +75,12 @@ eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを�
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
-- **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30` / `max_cost_usd_per_day: 5.0`。
-  実費は無人実行 (`loop-run.sh`) でのみ観測できるので、対話セッションでは回数と時間だけが効く
+- **予算**: 上の `max_runs_per_day: 8` / `max_minutes_per_run: 30` / `max_turns_per_run: 300`。
+  `max_cost_usd_per_day` は**空のまま**にする。このアカウントはサブスクリプションで、
+  `total_cost_usd` はトークン数から計算した参考値にすぎず追加課金も発生しないため、
+  金額を上限にしても意味のある歯止めにならない(API キー運用に持っていくときだけ設定する)。
+  暴走の歯止めはターン数が担う。実費は記録だけ続ける
+  (1 イテレーションの重さを測る相対指標として使う。実測で 1 回 $1.7〜$3.3 相当)
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress`(既定 2)回続いたら `status: stalled`
 
 ## ゲート (人間承認が必要な操作)

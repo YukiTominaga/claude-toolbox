@@ -38,6 +38,8 @@ stub_loop_cmd() {
   mkdir -p "$WORK/bin" "$WORK/.claude/loop"
   cat >"$WORK/bin/loopcmd" <<EOF
 #!/bin/bash
+# どの上限で起動されたかを記録する
+echo "\$*" >"$WORK/loopcmd-args"
 # エージェントが 1 イテレーションを終えた状態を作る
 CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" >/dev/null 2>&1
 if [ "$1" = "aborted" ]; then
@@ -175,6 +177,7 @@ EOF
   out=$(guard --check) || ng "上限未達なのに拒否した"
   printf '%s' "$out" | jq -e '.cost_today_usd == 0' >/dev/null || ng "cost_today_usd が 0 でない"
   printf '%s' "$out" | jq -e '.cost_remaining_usd == 5' >/dev/null || ng "残り予算が返っていない"
+  printf '%s' "$out" | jq -e '.max_turns_per_run == 300' >/dev/null || ng "ターン上限の既定が 300 でない"
 
   mkdir -p "$WORK/.claude/loop"
   ts=$(date -Iseconds)
@@ -214,23 +217,26 @@ run-normal)
 status: active
 max_runs_per_day: 8
 max_minutes_per_run: 30
-max_cost_usd_per_day: 5.0
+max_turns_per_run: 123
 ---
 EOF
   stub_loop_cmd judged
   out=$(run) || ng "正常な 1 イテレーションで exit が 0 でない: $out"
   printf '%s' "$out" | grep -q '判定 1 回' || ng "判定回数が報告されていない: $out"
 
+  # 暴走の歯止めはターン数。**金額では止めない**(サブスクでは追加課金が無く意味を持たない)
+  args=$(cat "$WORK/loopcmd-args")
+  printf '%s' "$args" | grep -q -- '--max-turns 123' || ng "ターン上限が渡っていない: $args"
+  printf '%s' "$args" | grep -q -- '--max-budget-usd' &&
+    ng "実費の上限が未設定なのに金額で止めようとしている: $args"
+
   ledger="$WORK/.claude/loop/run-log.jsonl"
   [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] ||
     ng "1 イテレーションで予算を $(grep -c '"event":"start"' "$ledger") 回消費した (ゲートの二重通過)"
+  # 実費は止めるためではなく、1 イテレーションの重さを測るために記録し続ける
   [ "$(grep -c '"event":"cost"' "$ledger")" -eq 1 ] || ng "実費が記録されていない"
   grep '"event":"cost"' "$ledger" | jq -e '.cost_usd == 1.25' >/dev/null || ng "実費の値が違う"
-
-  # 消費した実費が次回の残り予算に反映される
-  guard --check | jq -e '(.cost_remaining_usd - 3.75) | fabs < 0.001' >/dev/null ||
-    ng "残り予算に反映されていない"
-  ok "実費を記録し、予算を 1 回だけ消費する"
+  ok "ターン数で暴走を止め、実費は記録だけする"
   ;;
 
 # 無人実行: done と報告されたのに判定器が動いていないイテレーションを検出する

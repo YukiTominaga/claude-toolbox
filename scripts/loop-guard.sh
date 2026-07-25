@@ -46,11 +46,14 @@ get_field() {
 status=$(get_field status)
 max_runs=$(get_field max_runs_per_day)
 max_minutes=$(get_field max_minutes_per_run)
+max_turns=$(get_field max_turns_per_run)
 max_cost=$(get_field max_cost_usd_per_day)
 case "$max_runs" in '' | *[!0-9]*) max_runs=8 ;; esac
 case "$max_minutes" in '' | *[!0-9]*) max_minutes=30 ;; esac
-# 実費の上限は任意。未設定なら回数と時間による近似だけで判定する
-# (対話セッションではコストを観測できないため、そこでは常に未設定になる)
+case "$max_turns" in '' | *[!0-9]*) max_turns=300 ;; esac
+# 実費の上限は任意。**サブスクリプション(Max 等)では設定しないこと** — total_cost_usd は
+# トークン数から計算した参考値で、追加課金は発生しない。金額で止めても意味がない。
+# API キー運用や CI で実費が発生する場合にだけ設定する。
 case "$max_cost" in *[!0-9.]* | '') max_cost="" ;; esac
 
 if [ -n "$status" ] && [ "$status" != "active" ]; then
@@ -101,8 +104,9 @@ if [ "$check_only" -eq 0 ]; then
 fi
 
 jq -nc --argjson r "$runs_today" --argjson m "$max_runs" --argjson t "$max_minutes" \
-  --argjson c "$check_only" --argjson ct "$cost_today" --arg rem "$cost_remaining" \
-  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t, recorded:($c==0),
-    cost_today_usd:$ct}
+  --argjson tr "$max_turns" --argjson c "$check_only" --argjson ct "$cost_today" \
+  --arg rem "$cost_remaining" \
+  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t,
+    max_turns_per_run:$tr, recorded:($c==0), cost_today_usd:$ct}
    + (if $rem == "" then {} else {cost_remaining_usd:($rem|tonumber)} end)'
 exit 0

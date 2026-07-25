@@ -83,13 +83,22 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
   `scripts/loop-next.sh` が先頭の未着手項目を 1 件だけ返す(枯渇時は exit 3)。
   追記は `scripts/loop-add.sh` が採番するので、行を手で書かない。
   GitHub Issues は `/crystal:loop refill` で backlog に取り込む
-- **予算**: `LOOP.md` の `max_runs_per_day` / `max_minutes_per_run` / `max_cost_usd_per_day`。
-  `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が台帳に記録する**
-  (消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
+- **予算と暴走の歯止め**: `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が
+  台帳に記録する**(消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
   状態を見るだけの `--check` は記録しない。
-  **実費は無人実行でのみ観測できる** — `loop-run.sh` が `claude -p --output-format json` の
-  `total_cost_usd` を台帳に積み、ゲートがその日の合計で判定する。対話セッションでは
-  コストを観測できないので、回数と時間による近似だけが効く
+
+  | `LOOP.md` の設定 | 役割 |
+  |---|---|
+  | `max_runs_per_day` | 1 日に回してよい回数 |
+  | `max_minutes_per_run` | 1 イテレーションの壁時計時間(goal-gate が停止条件として効かせる) |
+  | `max_turns_per_run` | 暴走の歯止め。`loop-run.sh` が `--max-turns` として渡す |
+  | `max_cost_usd_per_day` | 実費の上限。**サブスクリプションでは空のままにする**(下記) |
+
+  **金額を歯止めにしない**。サブスクリプション(Max 等)では `total_cost_usd` はトークン数から
+  計算した参考値にすぎず追加課金も発生しないので、金額で止めても意味を持たない。
+  実費が本当に発生する API キー運用や CI に持っていくときだけ `max_cost_usd_per_day` を設定する。
+  **記録は常に続ける** — 1 イテレーションの重さを測る相対指標として使える
+  (実測で 1 回 $1.7〜$3.3 相当。決して軽くない)
 - **作業ブランチ**: `next` は項目ごとに `loop/<id>` ブランチを作って作業する。
   `main` のままだと `main` 直接コミット禁止と auto-commit の main スキップが重なり、
   **作業が一切コミットされない**ため
