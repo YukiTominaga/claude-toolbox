@@ -5,9 +5,11 @@
 - Use Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`,
   `chore:`, `ci:` — with an optional scope, e.g. `feat(auth): ...`.
 - Keep commits small and focused: one logical change per commit.
-- Commit or push only when the user asks. Exception: the `auto-commit` Stop
-  hook commits work-in-progress on feature branches so nothing is lost — those
-  commits are expected to be amended or squashed before review.
+- Commit freely on feature branches — an unrecorded change is a change that can
+  be lost. The `auto-commit` hook does this automatically at the end of a turn.
+- Work-in-progress commits are expected; amend or squash them into intentional
+  changes before asking for review.
+- Push only when the user asks.
 
 ## Branches
 
@@ -17,7 +19,7 @@
 
 ## Hygiene
 
-- Review `git status` and the diff before committing; don't blanket-`git add -A`
-  without checking what is staged. Exception: the `auto-commit` hook stages
-  everything by design, guarded by a secret-path check that aborts the commit.
+- Staging everything (`git add -A`) is fine; check the diff for accidentally
+  included secrets first (see `security.md`). The `auto-commit` hook enforces
+  this with a secret-path check that aborts the commit.
 - Don't rewrite published history.
