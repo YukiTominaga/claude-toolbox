@@ -344,6 +344,68 @@ stop-gate-no-state-dir)
   ok "カウントできない環境では往復中だけ素通しする"
   ;;
 
+# カウントの更新は一時ファイル経由の置換で行う。直書き (printf > "$STATE") は
+# 「ファイルを空にする」と「値を書く」の 2 段階になり、その隙間で読んだ側は空文字列を得て
+# count=0 に丸める。差し戻し上限はカウントが読めることだけに依存しているので、
+# 丸められると歯止めが黙って消える。置換なら読み手は常に旧値か新値のどちらかを見る。
+# inode が変わることは「上書きではなく置換で書かれた」ことの外形的な証拠。
+stop-gate-atomic-write)
+  init_git
+  pkg_json
+  stub_npm
+  set_npm 1
+  state="$WORK/.claude/loop/stop-gate-pushback"
+  mkdir -p "$WORK/.claude/loop"
+  printf '1\n' >"$state"
+  before_inode=$(ls -i "$state" | awk '{print $1}')
+
+  stopgate true 2>/dev/null && ng "赤なのに差し戻していない"
+
+  [ "$(cat "$state")" = "2" ] || ng "カウントが加算されていない ($(cat "$state"))"
+  after_inode=$(ls -i "$state" | awk '{print $1}')
+  [ "$before_inode" != "$after_inode" ] ||
+    ng "inode が変わっていない = 直書きで上書きしている (置換になっていない)"
+
+  # 一時ファイルの残骸が出ないこと。これは退行ガードであってミューテーション対象ではない
+  # (直書き実装には一時ファイルが無く、自明に成立してしまう)
+  leftovers=$(ls "$WORK/.claude/loop/" | grep '^stop-gate-pushback\.' || true)
+  [ -z "$leftovers" ] || ng "一時ファイルが残っている ($leftovers)"
+
+  ok "カウントの更新は置換で行い、一時ファイルを残さない"
+  ;;
+
+# 書き込み可否の事前判定は、実際の書き込み経路と同じ条件で行う。
+# 既存ファイルへの追記オープン (: >> "$STATE") はディレクトリが読み取り専用でも成功するため、
+# 一時ファイルの新規作成を要する実経路とずれる。ずれると「書けると判定したのに書けない」に
+# なり、カウントが増えないまま差し戻しだけを繰り返す (上限が数えられない)。
+stop-gate-readonly-dir-keeps-count)
+  init_git
+  pkg_json
+  stub_npm
+  set_npm 1
+  state="$WORK/.claude/loop/stop-gate-pushback"
+  mkdir -p "$WORK/.claude/loop"
+  printf '1\n' >"$state"
+  chmod 644 "$state"
+  # ng で途中終了しても後片付けできるよう、権限を戻してから消す
+  trap 'chmod 700 "$WORK/.claude/loop" 2>/dev/null; rm -rf "$WORK"' EXIT
+  chmod 500 "$WORK/.claude/loop"
+
+  # root で回すと chmod が効かず前提が崩れる。既存ファイルへの追記オープンはこの状況でも
+  # 成功する (それ自体がこのケースの主旨) ので、ガードは新規ファイルを作れるかで見る
+  : 2>/dev/null >"$WORK/.claude/loop/.probe" &&
+    ng "前提が崩れている (chmod 500 のディレクトリに新規ファイルを作れてしまう)"
+
+  before=$(calls_count)
+  stopgate true >/dev/null 2>&1 ||
+    ng "一時ファイルを作れないのに往復中に差し戻した (カウントできず無限ループになる)"
+  [ "$(calls_count)" -eq "$before" ] || ng "書けないと判定した後に L1 を実行した"
+  [ "$(cat "$state")" = "1" ] ||
+    ng "書けない環境でカウントが書き換わった ($(cat "$state"))"
+
+  ok "一時ファイルを作れない環境ではカウントを壊さず往復中は素通しする"
+  ;;
+
 # ---------------------------------------------------------------------------
 # goal-gate.sh の L1 ゲート
 # ---------------------------------------------------------------------------
