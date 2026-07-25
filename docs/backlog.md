@@ -32,7 +32,7 @@
 - [x] Q-6: README の Loop Engineering 節に、記録先4つの表を追記する  <!-- priority: med -->
 - [x] Q-7: goal.md の無いセッションで、押し戻し後に stop-gate が二度と検証しない穴を塞ぐ  <!-- priority: high -->
 - [x] Q-8: 未追跡ファイルへの追記が無進捗検知に映らない問題に対処する (S-4)  <!-- priority: med -->
-- [ ] Q-11: LOOP.md の作業範囲に docs/ と LOOP.md 本文を含め、frontmatter の予算と status の変更をゲート節に明記する  <!-- priority: high -->
+- [x] Q-11: LOOP.md の作業範囲に docs/ と LOOP.md 本文を含め、frontmatter の予算と status の変更をゲート節に明記する  <!-- priority: high -->
 - [ ] Q-19: stop-gate の差し戻しカウントの書き込みを原子的にする  <!-- priority: med -->
 - [ ] Q-17: rubric 型 eval が timeout 不在の環境で必ず SKIP になる問題を直す  <!-- priority: med -->
 - [ ] Q-16: 仕様のステータス表記を統一し、approved の自動インポートを機能させる  <!-- priority: med -->
