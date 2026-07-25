@@ -29,6 +29,14 @@ goalgate() {
     CLAUDE_PROJECT_DIR="$WORK" bash "$ROOT/hooks/goal-gate.sh"
 }
 
+# PATH から claude を外して呼ぶ: 判定器を叩かず定型メッセージ側の経路を検証する
+autocommit() { # $1=stop_hook_active (省略時 false)
+  printf '{"stop_hook_active":%s}' "${1:-false}" |
+    CLAUDE_PROJECT_DIR="$WORK" PATH=/usr/bin:/bin bash "$ROOT/hooks/auto-commit.sh"
+}
+
+commit_count() { git -C "$WORK" rev-list --count HEAD 2>/dev/null || echo 0; }
+
 write_queue() {
   mkdir -p "$WORK/docs"
   cat >"$WORK/docs/backlog.md"
@@ -209,6 +217,77 @@ goal-migrate)
   [ "$(goal_field round)" = "6" ] || ng "round が進んでいない"
   [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
   ok "旧形式の goal.md に停止条件のフィールドを補い、上限で止まる"
+  ;;
+
+# 自動コミット: feature ブランチでは未追跡ファイルごとコミットする
+auto-commit-basic)
+  init_git
+  git -C "$WORK" checkout -q -b feature/x
+  before=$(commit_count)
+  echo "変更" >>"$WORK/seed.txt"
+  mkdir -p "$WORK/docs" && echo "新規" >"$WORK/docs/new.md"
+  autocommit >/dev/null || ng "auto-commit の exit が 0 でない"
+  [ "$(commit_count)" -eq "$((before + 1))" ] || ng "コミットが 1 つ増えていない"
+  [ -z "$(git -C "$WORK" status --porcelain)" ] || ng "作業ツリーに変更が残っている"
+  git -C "$WORK" show --stat --oneline HEAD | grep -q 'docs/new.md' || ng "未追跡ファイルが含まれていない"
+  git -C "$WORK" log -1 --pretty=%s | grep -qE '^(chore|feat|fix|docs|refactor|test):' ||
+    ng "コミットメッセージが Conventional Commits 形式でない"
+  ok "feature ブランチで未追跡ごと 1 コミットにまとめた"
+  ;;
+
+# 自動コミット: 動いてはいけない場面で動かない
+auto-commit-skip)
+  init_git
+  echo "変更" >>"$WORK/seed.txt"
+
+  # main では動かない (rules/git-workflow.md の「main に直接コミットしない」)
+  git -C "$WORK" branch -M main
+  before=$(commit_count)
+  autocommit >/dev/null
+  [ "$(commit_count)" -eq "$before" ] || ng "main でコミットしてしまった"
+
+  # 差し戻しの往復中 (stop_hook_active) は動かない
+  git -C "$WORK" checkout -q -b feature/y
+  autocommit true >/dev/null
+  [ "$(commit_count)" -eq "$before" ] || ng "stop_hook_active でコミットしてしまった"
+
+  # 変更が無ければ何もしない
+  git -C "$WORK" add -A && git -C "$WORK" commit -qm manual
+  before=$(commit_count)
+  autocommit >/dev/null
+  [ "$(commit_count)" -eq "$before" ] || ng "変更が無いのにコミットした"
+
+  # マージ途中では動かない (git-dir は必ず絶対パスで解決する。相対パスだと
+  # このスクリプトの cwd 側 = 実リポジトリに MERGE_HEAD を作ってしまう)
+  echo "変更2" >>"$WORK/seed.txt"
+  merge_head="$(git -C "$WORK" rev-parse --absolute-git-dir)/MERGE_HEAD"
+  : >"$merge_head"
+  autocommit >/dev/null
+  rm -f "$merge_head"
+  [ "$(commit_count)" -eq "$before" ] || ng "マージ途中にコミットした"
+
+  ok "main / 差し戻し中 / 無変更 / マージ途中では動かない"
+  ;;
+
+# 自動コミット: 機密の可能性があるパスは中止して知らせる
+auto-commit-secret)
+  init_git
+  git -C "$WORK" checkout -q -b feature/z
+  before=$(commit_count)
+  echo "変更" >>"$WORK/seed.txt"
+  echo "API_KEY=xxx" >"$WORK/.env"
+  out=$(autocommit) || ng "auto-commit の exit が 0 でない"
+  [ "$(commit_count)" -eq "$before" ] || ng "機密パスがあるのにコミットした"
+  printf '%s' "$out" | jq -e '.systemMessage' >/dev/null 2>&1 || ng "systemMessage で知らせていない"
+  printf '%s' "$out" | grep -q '\.env' || ng "検出したパスを示していない"
+
+  # .gitignore に入れれば通常どおりコミットされる
+  echo ".env" >>"$WORK/.gitignore"
+  autocommit >/dev/null || ng "除外後の exit が 0 でない"
+  [ "$(commit_count)" -eq "$((before + 1))" ] || ng "除外後にコミットされていない"
+  git -C "$WORK" show --stat --oneline HEAD | grep -q '\.env$' && ng ".env がコミットに含まれている"
+
+  ok "機密パスは中止して知らせ、除外後は通常どおり動く"
   ;;
 
 *)

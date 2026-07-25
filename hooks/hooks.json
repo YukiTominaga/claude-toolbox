@@ -71,6 +71,16 @@
             "statusMessage": "ゴール達成判定中..."
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/auto-commit.sh\"",
+            "timeout": 120,
+            "statusMessage": "作業中の変更を自動コミット中..."
+          }
+        ]
       }
     ]
   }
