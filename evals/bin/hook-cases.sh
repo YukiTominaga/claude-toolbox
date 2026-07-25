@@ -278,7 +278,53 @@ stop-gate-pushback-reset)
   [ "$(cat "$WORK/.claude/loop/stop-gate-pushback")" = "1" ] ||
     ng "false でカウントがリセットされていない ($(cat "$WORK/.claude/loop/stop-gate-pushback"))"
   stopgate true 2>/dev/null && ng "リセット後に差し戻せていない"
-  ok "stop_hook_active: false でカウントがリセットされる"
+
+  # **作業ツリーが clean な false 停止でもリセットされること**。
+  # auto-commit が毎ターン作業ツリーを空にする運用では clean な false 停止が常態なので、
+  # 変更判定より後ろでリセットしていると、カウントが次の連鎖へ持ち越される。
+  # その結果、一度も差し戻していない連鎖の初回停止で L1 を飛ばし、
+  # 事実に反する「差し戻し上限」を出す(独立検証が捕まえた欠陥)。
+  git -C "$WORK" add -A && git -C "$WORK" commit -qm clean
+  [ -z "$(git -C "$WORK" status --porcelain -- . ':(exclude).claude/loop')" ] ||
+    ng "前提が崩れている (作業ツリーが clean でない)"
+  printf '3\n' >"$WORK/.claude/loop/stop-gate-pushback"
+  stopgate >/dev/null 2>&1 || ng "clean な false 停止で差し戻した"
+  [ "$(cat "$WORK/.claude/loop/stop-gate-pushback")" = "0" ] ||
+    ng "clean な false 停止でリセットされない (次の連鎖に持ち越される)"
+
+  # 持ち越されていないので、次の連鎖では初回から検証される
+  echo "work" >>"$WORK/feature.txt"
+  reset_calls
+  out=$(stopgate true 2>/dev/null) && ng "新しい連鎖の初回で差し戻していない"
+  [ "$(calls_count)" -gt 0 ] || ng "新しい連鎖の初回で L1 が走っていない"
+  printf '%s' "$out" | grep -q '差し戻し上限' && ng "差し戻していないのに上限メッセージを出した"
+
+  ok "false でカウントがリセットされる (clean なターンでも)"
+  ;;
+
+# 緑のラウンドではカウントを減らさない。減らすと赤緑の往復で上限に到達しなくなる
+stop-gate-green-keeps-count)
+  init_git
+  pkg_json
+  stub_npm
+  set_npm 1
+  stopgate 2>/dev/null                        # 1 回目の差し戻し (count=1)
+  set_npm 0
+  stopgate true >/dev/null 2>&1 || ng "緑なのに差し戻した"
+  [ "$(cat "$WORK/.claude/loop/stop-gate-pushback")" = "1" ] ||
+    ng "緑のラウンドでカウントが減った ($(cat "$WORK/.claude/loop/stop-gate-pushback"))"
+
+  # 赤緑を往復しても上限に到達する
+  for _ in 1 2; do
+    set_npm 1
+    stopgate true 2>/dev/null
+    set_npm 0
+    stopgate true >/dev/null 2>&1
+  done
+  set_npm 1
+  out=$(stopgate true 2>/dev/null) || ng "赤緑の往復で上限に到達しない (無限ループ)"
+  printf '%s' "$out" | grep -q '差し戻し上限' || ng "上限到達が知らされていない"
+  ok "緑のラウンドではカウントを減らさない"
   ;;
 
 # カウントを永続化できない環境では、往復中は素通しする (上限を数えられないため)。

@@ -25,6 +25,22 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 # --- git 管理下でなければ対象外 ---
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
+STATE_DIR=".claude/loop"
+STATE="$STATE_DIR/stop-gate-pushback"
+
+# --- 連鎖が切れた合図を最優先で処理する ---
+# stop_hook_active: false は「前の差し戻し連鎖が終わった」という意味なので、
+# **変更判定より前に**カウントを 0 に戻す。後ろに置くと、auto-commit が作業ツリーを
+# 空にする運用では clean な false 停止が常態になり、カウントが次の連鎖へ持ち越される。
+# その結果、一度も差し戻していない連鎖の初回停止で L1 を飛ばし、
+# 事実に反する「差し戻し上限に達した」を出す(独立検証が捕まえた欠陥)。
+#
+# ファイルが無ければカウントは実質 0 なので何もしない。ここで作らないことで、
+# ループを使っていないプロジェクトに .claude/loop/ を生やさずに済む。
+if [ "$active" != "true" ] && [ -f "$STATE" ]; then
+  printf '0\n' >"$STATE" 2>/dev/null
+fi
+
 # --- 変更がなければゲート不要(質問応答セッション等) ---
 # カウントの置き場である .claude/loop は変更判定から除外する。含めると、記帳しただけの
 # セッションが「変更あり」になり検証が走る。.gitignore に頼らないのは goal-gate と同じ理由。
@@ -41,8 +57,6 @@ CHECKS="$ROOT/scripts/project-checks.sh"
 # --- 差し戻し回数のカウント ---
 # 書けない環境ではカウントできない。差し戻すと上限が効かず無限ループになるので、
 # 往復中 (active) だけは従来どおり素通しする。初回停止は数えなくても 1 回で済むので検証する。
-STATE_DIR=".claude/loop"
-STATE="$STATE_DIR/stop-gate-pushback"
 # リダイレクト失敗のメッセージは `>>file 2>/dev/null` では消えない(順序の都合)ので先に閉じる
 if ! mkdir -p "$STATE_DIR" 2>/dev/null || ! : 2>/dev/null >>"$STATE"; then
   [ "$active" = "true" ] && exit 0
