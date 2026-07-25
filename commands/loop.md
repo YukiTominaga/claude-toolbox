@@ -62,7 +62,9 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
    `loop-add.sh` の採番もずれる)
 3. `.gitignore` に `.claude/loop/` がなければ追加を提案する(台帳はローカルの実行履歴であり、
    untracked のままだと stop-gate の「変更なし判定」を汚染するため)
-4. 作成したファイルと、次に実行するコマンド(`/crystal:loop next`)を報告する
+4. 作成したファイルと、次に実行するコマンド(`/crystal:loop next`)を報告する。
+   併せて「`next` は項目ごとに `loop/<id>` ブランチを作って作業し、
+   PR の作成はしない」というブランチ運用を 1 行添える
 
 ## `next` の場合(1 イテレーション)
 
@@ -75,6 +77,12 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
    `id` / `title` / `spec` を使う
 3. `LOOP.md` の「2. スコープ」と「ゲート」を読む。この項目がスコープ外なら、
    `loop-log.sh <id> blocked "スコープ外"` を記録して終了する
+3.5. **作業ブランチを確保する**。現在のブランチが `main` / `master` / detached HEAD なら、
+   `git switch -c loop/<id>`(例: `loop/Q-8`)で feature ブランチを作って切り替える。
+   既に feature ブランチにいるならそのまま使う。
+   **これを飛ばすと作業が一切コミットされない**: `main` への直接コミットは
+   `rules/git-workflow.md` が禁じており、auto-commit フックも `main` を無条件でスキップする
+   (しかも黙ってスキップするので気づけない)
 4. 仕様が要るかを判断する(全項目に仕様は要らない):
    - `spec` があればそのファイルを読む
    - 無く、受け入れ条件が 1〜2 行で自明なら(typo 修正・依存更新・ログ追加など)
@@ -92,11 +100,18 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
    - `docs/backlog.md` の該当行を `- [ ]` から `- [x]` に変える
      (`status: stalled` で終わった場合は変えない)
    - `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-log.sh" <id> <done|failed|blocked> <ラウンド数> "<一行メモ>"`
-   - `LOOP.md` の「ゲート」に該当する操作(push / PR 作成など)は**実行せず**、
-     必要であることをユーザーに報告する
-8. 最後に 1 行で報告する: 「Q-N: <title> → <結果>(残り <未着手件数> 件、本日 <n>/<max> 回)」
+   - **feature ブランチへの push はしてよい**(未 push のコミットは環境が消えると失われ、
+     かつ feature ブランチへの push は可逆であるため)。
+     **PR の作成・マージはしない** — `LOOP.md` の「ゲート」に該当するので、
+     必要であることをユーザーに報告するに留める
+8. 最後に 1 行で報告する:
+   「Q-N: <title> → <結果>(ブランチ <branch>、残り <未着手件数> 件、本日 <n>/<max> 回)」
 
 ## `refill` の場合
+
+**先に GitHub MCP のツール(`list_issues`)が使えるかを確認する。使えない場合は
+その旨を報告して終了する**(このセッションに GitHub の接続が無い、と伝える。
+ラベルを尋ねてから失敗させない)。
 
 `LOOP.md` の frontmatter `issue_labels` を読み、GitHub MCP の `list_issues` で
 そのラベルの open な Issue を取得する(`issue_labels` が空ならユーザーにラベルを尋ねる)。
@@ -110,6 +125,9 @@ plan mode の出力・設計メモなど、**手段(使う関数・変更する�
 (取り込むのはタイトルと番号だけ。本文は仕様作成時に人間と一緒に読む)。
 
 ## `status` の場合
+
+**予算判定は `"${CLAUDE_PLUGIN_ROOT}/scripts/loop-guard.sh" --check` を使う**
+(`--check` なしで呼ぶと、状態を見ただけで実行 1 回分の予算を消費する)。
 
 - `LOOP.md` の status / 予算
 - `.claude/loop/run-log.jsonl` の直近 10 件と、本日の実行回数

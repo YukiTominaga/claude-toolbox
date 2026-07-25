@@ -1,16 +1,28 @@
 #!/bin/bash
 # loop-guard.sh — 外側ループの予算ゲート。1 イテレーションを始めてよいか判定する。
-# 使い方: loop-guard.sh
+# 使い方: loop-guard.sh [--check]
 #   標準出力: {"ok",...} の JSON 1 行
 #   exit 0 = 実行してよい / exit 1 = 実行してはいけない(予算超過 or paused)
+#
+# 判定を通過したとき、このスクリプト自身が台帳に {"event":"start"} を記録する。
+# 予算の消費をエージェントの自己申告(loop-log.sh の呼び忘れ)に依存させないため:
+# イテレーションが途中で失敗・中断しても、開始した事実は必ず残る。
+# --check を付けると記録せず判定だけ返す(状態を見るだけで予算を消費しない)。
+#
 # LOOP.md が無い場合は素通しする(fail-open)。予算はトークンではなく
 # 「1日の実行回数」と「1実行の壁時計時間」で表現する(シェルから観測できる量に限る)。
+# 台帳に event を持たない旧形式の行は集計対象外になる。台帳は .gitignore 対象の
+# ローカル履歴なので、移行時に当日分が 0 から数え直しになっても実害はない。
 set -u
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 
 LOOP="LOOP.md"
-LEDGER=".claude/loop/run-log.jsonl"
+LEDGER_DIR=".claude/loop"
+LEDGER="$LEDGER_DIR/run-log.jsonl"
+
+check_only=0
+[ "${1:-}" = "--check" ] && check_only=1
 
 command -v jq >/dev/null 2>&1 || {
   echo '{"ok":true,"reason":"jq なし。予算判定をスキップ"}'
@@ -45,7 +57,7 @@ fi
 today=$(date +%Y-%m-%d)
 runs_today=0
 if [ -f "$LEDGER" ]; then
-  runs_today=$(grep -c "\"ts\":\"$today" "$LEDGER" 2>/dev/null) || runs_today=0
+  runs_today=$(grep -c "\"ts\":\"$today.*\"event\":\"start\"" "$LEDGER" 2>/dev/null) || runs_today=0
 fi
 case "$runs_today" in '' | *[!0-9]*) runs_today=0 ;; esac
 
@@ -56,6 +68,14 @@ if [ "$runs_today" -ge "$max_runs" ]; then
   exit 1
 fi
 
+if [ "$check_only" -eq 0 ]; then
+  if mkdir -p "$LEDGER_DIR" 2>/dev/null; then
+    jq -nc --arg ts "$(date -Iseconds)" '{ts: $ts, event: "start"}' >>"$LEDGER" 2>/dev/null
+    runs_today=$((runs_today + 1))
+  fi
+fi
+
 jq -nc --argjson r "$runs_today" --argjson m "$max_runs" --argjson t "$max_minutes" \
-  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t}'
+  --argjson c "$check_only" \
+  '{ok:true, runs_today:$r, max_runs_per_day:$m, max_minutes_per_run:$t, recorded:($c==0)}'
 exit 0

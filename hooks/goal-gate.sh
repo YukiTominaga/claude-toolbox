@@ -114,10 +114,19 @@ case "$started_epoch" in
 esac
 
 # --- 停止条件 4: 無進捗検知 ---
-# 作業ツリーの差分に変化がないラウンドは、判定器を呼ばずに差し戻す(コスト削減も兼ねる)。
+# 前ラウンドから状態が変わっていないラウンドは、判定器を呼ばずに差し戻す(コスト削減も兼ねる)。
 # git 管理下でない場合は署名が取れないのでこの層はスキップする。
+#
+# 署名には HEAD を必ず含める: コミット済みの前進を見落とさないため。
+# auto-commit フックや「feature ブランチでは自由にコミット」の運用により、ターン終了時の
+# 作業ツリーは空であることが普通になる。作業ツリーだけを見ると、コミットを積み続けていても
+# 毎ラウンド同一の署名になり、前進を停滞と誤判定して止まる。
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  sig=$( { git diff HEAD; git status --porcelain; } 2>/dev/null | cksum | tr -d ' ')
+  sig=$( {
+    git rev-parse HEAD
+    git diff HEAD
+    git status --porcelain
+  } 2>/dev/null | cksum | tr -d ' ')
   last_sig=$(get_field last_sig)
   no_progress=$(get_field no_progress)
   max_no_progress=$(get_field max_no_progress)

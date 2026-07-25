@@ -24,12 +24,14 @@ next() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-next.sh" "$@"; }
 add() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-add.sh" "$@" 2>/dev/null; }
 guard() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-guard.sh" "$@"; }
 loglog() { CLAUDE_PROJECT_DIR="$WORK" "$ROOT/scripts/loop-log.sh" "$@"; }
+# hook は PATH から claude を外して呼ぶ。eval が実際の判定器 (Haiku) を叩くと
+# 遅く・課金され・出力が非決定的になるため。停止条件や機密検知などの検証したい層は
+# いずれも claude の有無より手前で効くので、これで十分に本番経路を通せる。
 goalgate() {
-  printf '{"transcript_path":"","session_id":"eval"}' |
-    CLAUDE_PROJECT_DIR="$WORK" bash "$ROOT/hooks/goal-gate.sh"
+  printf '{"transcript_path":"","session_id":"eval","stop_hook_active":false}' |
+    CLAUDE_PROJECT_DIR="$WORK" PATH=/usr/bin:/bin bash "$ROOT/hooks/goal-gate.sh"
 }
 
-# PATH から claude を外して呼ぶ: 判定器を叩かず定型メッセージ側の経路を検証する
 autocommit() { # $1=stop_hook_active (省略時 false)
   printf '{"stop_hook_active":%s}' "${1:-false}" |
     CLAUDE_PROJECT_DIR="$WORK" PATH=/usr/bin:/bin bash "$ROOT/hooks/auto-commit.sh"
@@ -145,8 +147,31 @@ guard-open)
   ok "LOOP.md 不在は fail-open"
   ;;
 
-# 予算ゲート: 当日の実行回数が上限に達したら止める
+# 予算ゲート: ゲート自身が実行を数える(エージェントの自己申告に依存しない)
 guard-budget)
+  write_loop <<'EOF'
+---
+status: active
+max_runs_per_day: 2
+max_minutes_per_run: 30
+---
+EOF
+  # loop-log.sh を一度も呼ばない = エージェントが台帳を書き忘れた状況を再現する
+  guard >/dev/null || ng "1 回目の実行が許可されていない"
+  guard >/dev/null || ng "2 回目の実行が許可されていない"
+  guard >/dev/null 2>&1 && ng "上限到達後も実行が許可された (予算が消費されていない)"
+
+  # 結果行は予算の集計対象ではない (start 行だけを数える)
+  ledger="$WORK/.claude/loop/run-log.jsonl"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 2 ] || ng "start 行が 2 行でない"
+  loglog Q-1 done 1 "eval" >/dev/null || ng "結果行の追記に失敗"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 2 ] || ng "結果行が start として数えられている"
+
+  ok "ゲート自身が実行を数え、上限で止める"
+  ;;
+
+# 予算ゲート: --check は判定だけ返し、予算を消費しない
+guard-check)
   write_loop <<'EOF'
 ---
 status: active
@@ -154,10 +179,11 @@ max_runs_per_day: 1
 max_minutes_per_run: 30
 ---
 EOF
-  guard >/dev/null || ng "1 回目の実行が許可されていない"
-  loglog Q-1 done 1 "eval" >/dev/null || ng "台帳への追記に失敗"
-  guard >/dev/null 2>&1 && ng "上限到達後も実行が許可された"
-  ok "上限到達で実行を止めた"
+  out=$(guard --check) || ng "--check が拒否した"
+  printf '%s' "$out" | jq -e '.recorded == false' >/dev/null || ng "recorded:false が返っていない"
+  [ -f "$WORK/.claude/loop/run-log.jsonl" ] && ng "--check なのに台帳に書き込んだ"
+  guard >/dev/null || ng "--check の後で実行が許可されない (予算を消費してしまった)"
+  ok "--check は記録せず判定だけ返す"
   ;;
 
 # 予算ゲート: paused の間は動かない
@@ -195,7 +221,8 @@ goal-budget)
 goal-no-progress)
   init_git
   write_goal 1 "$(date +%s)" 60
-  sig=$(cd "$WORK" && { git diff HEAD; git status --porcelain; } 2>/dev/null | cksum | tr -d ' ')
+  sig=$(cd "$WORK" && { git rev-parse HEAD; git diff HEAD; git status --porcelain; } 2>/dev/null |
+    cksum | tr -d ' ')
   sed -i.bak "s/^last_sig:.*/last_sig: $sig/" "$WORK/.claude/goal.md" && rm -f "$WORK/.claude/goal.md.bak"
   goalgate >/dev/null 2>&1
   [ "$?" -eq 0 ] || ng "無進捗の上限到達時の exit が 0 でない"
@@ -217,6 +244,68 @@ goal-migrate)
   [ "$(goal_field round)" = "6" ] || ng "round が進んでいない"
   [ "$(goal_field status)" = "stalled" ] || ng "status が stalled になっていない"
   ok "旧形式の goal.md に停止条件のフィールドを補い、上限で止まる"
+  ;;
+
+# hook 相互作用: goal-gate と auto-commit を同じターンで動かしても誤 stall しない
+# (単体シナリオだけでは、auto-commit が作業ツリーを空にすることで goal-gate の
+#  無進捗検知が前進を停滞と誤判定する不具合を捕まえられなかった)
+goal-gate-with-auto-commit)
+  init_git
+  git -C "$WORK" checkout -q -b feature/loop
+  mkdir -p "$WORK/.claude"
+  echo ".claude/goal.md" >"$WORK/.gitignore"
+  cat >"$WORK/.claude/goal.md" <<EOF
+---
+status: active
+round: 0
+max_rounds: 20
+no_progress: 0
+max_no_progress: 2
+last_sig:
+started_epoch: $(date +%s)
+max_minutes: 600
+---
+# ゴール: eval
+
+## 完了条件
+
+- [ ] DC-1: x
+EOF
+
+  # 1 ターン = エージェントの作業 → (Stop) goal-gate → auto-commit
+  # $1 = none        何もしない (完全な停滞)
+  #      dirty       変更を残したまま終える (auto-commit がコミットする)
+  #      committed   ターン中に自分でコミットまで済ませる ← 誤 stall はここで起きる
+  ac_turn() {
+    case "$1" in
+    dirty) echo "work $2" >>"$WORK/feature.txt" ;;
+    committed)
+      echo "work $2" >>"$WORK/feature.txt"
+      git -C "$WORK" add -A
+      git -C "$WORK" commit -qm "feat: work $2"
+      ;;
+    esac
+    goalgate >/dev/null 2>&1
+    autocommit >/dev/null 2>&1
+  }
+
+  # rules が「feature ブランチでは自由にコミット」なので、ターン中に自分でコミットするのが
+  # 通常運転になる。この場合 Stop 時点の作業ツリーは空で、作業ツリーだけを署名にしていると
+  # 毎ラウンド同一になり、前進しているのに停滞と誤判定される。
+  for i in 1 2 3 4; do ac_turn committed "$i"; done
+  [ "$(goal_field status)" = "active" ] ||
+    ng "自分でコミットしながら前進しているのに stalled になった (round=$(goal_field round), no_progress=$(goal_field no_progress))"
+
+  # 変更を残して終えるターン (auto-commit 任せ) でも誤判定しないこと
+  for i in 5 6; do ac_turn dirty "$i"; done
+  [ "$(goal_field status)" = "active" ] || ng "auto-commit 任せの前進で stalled になった"
+  [ "$(git -C "$WORK" rev-list --count HEAD)" -ge 6 ] || ng "コミットが積まれていない"
+
+  # 手が止まったら検知できること (検知能力を失っていないことの確認)
+  for i in 7 8 9; do ac_turn none "$i"; done
+  [ "$(goal_field status)" = "stalled" ] || ng "完全に停滞したのに stalled にならない"
+
+  ok "自分でコミットしても誤 stall せず、停滞したら検知する"
   ;;
 
 # 自動コミット: feature ブランチでは未追跡ファイルごとコミットする

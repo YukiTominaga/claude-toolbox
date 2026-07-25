@@ -1,9 +1,14 @@
 #!/bin/bash
-# loop-log.sh — 外側ループの実行台帳に 1 行追記する。
+# loop-log.sh — 外側ループの実行台帳に「結果」の 1 行を追記する。
 # 使い方: loop-log.sh <item_id> <done|failed|blocked|skipped> [rounds] [メモ...]
 # 追記先: $CLAUDE_PROJECT_DIR/.claude/loop/run-log.jsonl
 # ループがクラッシュしてもコンテキストが飛んでも「何を回したか」が残るようにする。
 # エージェントに JSON を直書きさせず、必ずこのスクリプトを経由すること。
+#
+# 台帳には event 付きの 2 種類の行が入る:
+#   {"event":"start"}   loop-guard.sh が実行開始時に記録する(予算の集計対象)
+#   {"event":"<結果>"}  このスクリプトが記録する(何がどうなったかの履歴)
+# 予算を数えるのは start 行だけなので、この呼び出しを忘れても予算判定は狂わない。
 set -u
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 1
@@ -51,7 +56,7 @@ jq -nc \
   --arg result "$result" \
   --arg notes "$notes" \
   --argjson rounds "$rounds" \
-  '{ts: $ts, item_id: $item_id, result: $result, rounds: $rounds, notes: $notes}' \
+  '{ts: $ts, event: $result, item_id: $item_id, result: $result, rounds: $rounds, notes: $notes}' \
   >>"$LEDGER_DIR/run-log.jsonl" || exit 1
 
 echo "loop-log: $item_id → $result (台帳: $LEDGER_DIR/run-log.jsonl)"
