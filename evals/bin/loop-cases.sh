@@ -119,13 +119,13 @@ EOF
   ok "採番・メタ書式・discover との互換が期待どおり"
   ;;
 
-# 予算ゲート: LOOP.md が無ければ素通し(fail-open)
+# 実行ゲート: LOOP.md が無ければ素通し(fail-open)
 guard-open)
   guard >/dev/null || ng "LOOP.md 不在で素通ししていない"
   ok "LOOP.md 不在は fail-open"
   ;;
 
-# 予算ゲート: ゲート自身が実行を数える(エージェントの自己申告に依存しない)
+# 実行ゲート: 回数では止めない (撤廃済み)。数えはするが判定には使わない
 guard-budget)
   write_loop <<'EOF'
 ---
@@ -133,36 +133,59 @@ status: active
 max_runs_per_day: 2
 ---
 EOF
-  # loop-log.sh を一度も呼ばない = エージェントが台帳を書き忘れた状況を再現する
-  guard >/dev/null || ng "1 回目の実行が許可されていない"
-  guard >/dev/null || ng "2 回目の実行が許可されていない"
-  guard >/dev/null 2>&1 && ng "上限到達後も実行が許可された (予算が消費されていない)"
-
-  # 結果行は予算の集計対象ではない (start 行だけを数える)
+  # 旧 LOOP.md に上限が残っていても効かないこと。宣言だけ消す形だと
+  # 「宣言が無ければ既定値で止まる」という欠陥が残るため、宣言を残して確かめる
+  mkdir -p "$WORK/.claude/loop"
   ledger="$WORK/.claude/loop/run-log.jsonl"
-  [ "$(grep -c '"event":"start"' "$ledger")" -eq 2 ] || ng "start 行が 2 行でない"
-  loglog Q-1 done 1 "eval" >/dev/null || ng "結果行の追記に失敗"
-  [ "$(grep -c '"event":"start"' "$ledger")" -eq 2 ] || ng "結果行が start として数えられている"
+  ts=$(date -Iseconds)
+  i=0
+  while [ "$i" -lt 100 ]; do
+    printf '{"ts":"%s","event":"start"}\n' "$ts" >>"$ledger"
+    i=$((i + 1))
+  done
 
-  ok "ゲート自身が実行を数え、上限で止める"
+  out=$(guard) || ng "当日 100 回でも実行できるはず (回数では止めない): $out"
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null || ng "ok:true が返っていない: $out"
+  printf '%s' "$out" | jq -e 'has("max_runs_per_day")' >/dev/null &&
+    ng "回数上限を判定材料として返している: $out"
+  printf '%s' "$out" | jq -e 'has("runs_today")' >/dev/null ||
+    ng "runs_today を返していない (止めないが数えることは続ける): $out"
+
+  # 止めないが**数える**。記録はゲート自身が行う(エージェントの自己申告に依存しない)
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 101 ] || ng "1 回目の start 行が積まれていない"
+  guard >/dev/null || ng "2 回目も許可されるはず"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 102 ] || ng "2 回目の start 行が積まれていない"
+
+  # 結果行は start として数えられない (行種を取り違えると実行回数がずれる)
+  loglog Q-1 done 1 "eval" >/dev/null || ng "結果行の追記に失敗"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 102 ] || ng "結果行が start として数えられている"
+
+  ok "回数では止めず、実行を数え続ける"
   ;;
 
-# 予算ゲート: --check は判定だけ返し、予算を消費しない
+# 実行ゲート: --check は記録せず、実績値だけを返す
 guard-check)
   write_loop <<'EOF'
 ---
 status: active
-max_runs_per_day: 1
 ---
 EOF
+  ledger="$WORK/.claude/loop/run-log.jsonl"
   out=$(guard --check) || ng "--check が拒否した"
   printf '%s' "$out" | jq -e '.recorded == false' >/dev/null || ng "recorded:false が返っていない"
-  [ -f "$WORK/.claude/loop/run-log.jsonl" ] && ng "--check なのに台帳に書き込んだ"
-  guard >/dev/null || ng "--check の後で実行が許可されない (予算を消費してしまった)"
-  ok "--check は記録せず判定だけ返す"
+  printf '%s' "$out" | jq -e '.runs_today == 0' >/dev/null || ng "runs_today が 0 でない: $out"
+  [ -f "$ledger" ] && ng "--check なのに台帳に書き込んだ"
+
+  guard >/dev/null || ng "記録付きの呼び出しが拒否された"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] || ng "記録付きの呼び出しで start 行が積まれない"
+
+  out=$(guard --check) || ng "2 回目の --check が拒否した"
+  printf '%s' "$out" | jq -e '.runs_today == 1' >/dev/null || ng "--check が実績値を返していない: $out"
+  [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] || ng "--check が start 行を積んだ"
+  ok "--check は記録せず、実績値だけを返す"
   ;;
 
-# 予算ゲート: 金額では止めない。cost 行がいくら積まれていても実行を拒まない
+# 実行ゲート: 金額では止めない。cost 行がいくら積まれていても実行を拒まない
 guard-cost-never-blocks)
   write_loop <<'EOF'
 ---
@@ -177,13 +200,18 @@ EOF
   printf '{"ts":"%s","event":"cost","cost_usd":999}\n' "$ts" >>"$WORK/.claude/loop/run-log.jsonl"
 
   out=$(guard --check) || ng "実費が積まれているだけで拒否した (金額で止めてはいけない)"
-  printf '%s' "$out" | jq -e '.max_turns_per_run == 300' >/dev/null || ng "ターン上限の既定が 300 でない"
+  # **否定 assertion だけにしない**。「返さないこと」しか見ないケースは、ゲートが
+  # 何もしない no-op でも PASS する(実測: 空虚な eval は撤廃系のケースで生まれやすい)。
+  # ゲートが生きていることを肯定形で先に押さえる
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null || ng "ok:true が返っていない: $out"
+  printf '%s' "$out" | jq -e 'has("runs_today")' >/dev/null ||
+    ng "runs_today を返していない (ゲートが判定していない疑い): $out"
   printf '%s' "$out" | jq -e 'has("cost_today_usd")' >/dev/null && ng "実費を判定材料として返している"
   printf '%s' "$out" | jq -e 'has("cost_remaining_usd")' >/dev/null && ng "残り予算を返している"
   ok "金額では止めず、実費を判定材料にも使わない"
   ;;
 
-# 無人実行: 判定器を通った 1 イテレーション。実費を記録し、予算は 1 回だけ消費する
+# 無人実行: 判定器を通った 1 イテレーション。実費を記録し、start 行を 1 行だけ積む
 run-normal)
   write_loop <<'EOF'
 ---
@@ -196,15 +224,19 @@ EOF
   out=$(run) || ng "正常な 1 イテレーションで exit が 0 でない: $out"
   printf '%s' "$out" | grep -q '判定 1 回' || ng "判定回数が報告されていない: $out"
 
-  # 暴走の歯止めはターン数。**金額では止めない**(サブスクでは追加課金が無く意味を持たない)
+  # 暴走の歯止めはターン数。**スクリプト内の定数**であり LOOP.md からは読まない
+  # (LOOP.md はループ自身が編集できるので、そこに書いた上限は自分で緩められる)。
+  # **金額でも止めない**(サブスクでは追加課金が無く意味を持たない)
   args=$(cat "$WORK/loopcmd-args")
-  printf '%s' "$args" | grep -q -- '--max-turns 123' || ng "ターン上限が渡っていない: $args"
+  printf '%s' "$args" | grep -q -- '--max-turns 300' || ng "定数のターン上限が渡っていない: $args"
+  printf '%s' "$args" | grep -q -- '--max-turns 123' &&
+    ng "LOOP.md の宣言を読んでいる (ループが自分で緩められる): $args"
   printf '%s' "$args" | grep -q -- '--max-budget-usd' &&
     ng "金額で止めようとしている (歯止めはターン数が担う): $args"
 
   ledger="$WORK/.claude/loop/run-log.jsonl"
   [ "$(grep -c '"event":"start"' "$ledger")" -eq 1 ] ||
-    ng "1 イテレーションで予算を $(grep -c '"event":"start"' "$ledger") 回消費した (ゲートの二重通過)"
+    ng "1 イテレーションで start 行を $(grep -c '"event":"start"' "$ledger") 行積んだ (ゲートの二重通過)"
   # 実費は止めるためではなく、1 イテレーションの重さを測るために記録し続ける
   [ "$(grep -c '"event":"cost"' "$ledger")" -eq 1 ] || ng "実費が記録されていない"
   grep '"event":"cost"' "$ledger" | jq -e '.cost_usd == 1.25' >/dev/null || ng "実費の値が違う"
@@ -260,7 +292,7 @@ EOF
   ok "打ち切られたイテレーションを台帳に残す"
   ;;
 
-# 予算ゲート: paused の間は動かない
+# 実行ゲート: paused の間は動かない
 guard-paused)
   write_loop <<'EOF'
 ---
@@ -286,7 +318,7 @@ log-recent)
   [ "$(printf '%s\n' "$out" | head -n1 | jq -r .item_id)" = "Q-3" ] || ng "新しい順になっていない"
   [ "$(printf '%s\n' "$out" | tail -n1 | jq -r .item_id)" = "Q-2" ] || ng "2 件目が Q-2 でない"
 
-  # 予算の集計用の行 (start / cost) は混ざらない。
+  # 集計用の行 (start / cost) は混ざらない。
   # 除外リスト方式だと行種を足すたびに読み側が壊れるので、両方を明示的に見る
   printf '{"ts":"2026-01-01T00:00:00+09:00","event":"start"}\n' >>"$WORK/.claude/loop/run-log.jsonl"
   printf '{"ts":"2026-01-01T00:00:00+09:00","event":"cost","cost_usd":1.25}\n' >>"$WORK/.claude/loop/run-log.jsonl"

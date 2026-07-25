@@ -3,20 +3,19 @@
      周期実行そのものは組み込みの /loop や Routines に任せる(このファイルは契約だけを持つ)。 -->
 ---
 status: active            # active | paused (paused の間 /crystal:loop next は何もしない)
-max_runs_per_day: 8       # 予算: 1日の実行回数上限。超えたら loop-guard.sh が止める
-max_turns_per_run: 300    # 暴走の歯止め: 1イテレーションのターン数上限 (loop-run.sh が渡す)。
-                          # 正常なイテレーションでは発火しない値にすること。
-                          # **金額では止めない** — total_cost_usd はトークン数からの参考値で、
-                          # サブスクリプションでは追加課金も発生せず歯止めにならない
 issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue のラベル (カンマ区切り)
 ---
+<!-- 実行回数・経過時間・金額による予算はここに書かない (crystal 本体で撤廃済み。
+     docs/spec/budget-removal.md)。対話セッションでは人が見ているので予算は邪魔になるだけで、
+     無人実行の歯止めは scripts/loop-run.sh がスクリプト内の定数として持つ。
+     このファイルはループ自身が編集できるため、ここに書いた上限は自分で緩められる。 -->
 # ループ契約
 
 ## 1. トリガー (cadence)
 
 <!-- いつ回るか。手動から始め、段階的に上げる:
      - 手動:   必要なときに /crystal:loop next を叩く
-     - 対話中: /loop 30m /crystal:loop next (組み込みの /loop に委譲)
+     - 対話中: /loop <間隔> /crystal:loop next (組み込みの /loop に委譲)
      - 無人:   cron / launchd から ./scripts/loop-run.sh (登録は人が行う)
 
      **昇格の条件はその場で判定できる形で書くこと**。「実績ができたら」のような
@@ -58,13 +57,16 @@ issue_labels:             # 任意: /crystal:loop refill が拾う GitHub Issue 
 
 <!-- 挙げた層すべてを効かせる。単独の層に頼らない。
      goal-gate が駆動する内側ループの停止条件は done-check / 反復上限 / 無進捗 の 3 層。
-     予算は外側ループ (loop-guard.sh) の歯止めで、層数には数えない。
-     経過時間による停止は crystal 本体で撤廃済み (docs/spec/budget-removal.md)。 -->
+     外側ループの停止は status: paused (人が倒すスイッチ) と、無人実行のターン数上限
+     (scripts/loop-run.sh の定数) が担う。
+     実行回数・経過時間・金額による停止は crystal 本体で撤廃済み
+     (docs/spec/budget-removal.md)。 -->
 
 - **done-check**: goal-gate が完了条件を「達成」と判定 → `status: done`
 - **反復上限**: `.claude/goal.md` の `max_rounds`(既定 5)
 - **無進捗**: 差分が変わらないラウンドが `max_no_progress` 回続いたら `status: stalled`
-- **予算**: 上の `max_runs_per_day`
+- **手動停止**: frontmatter の `status: paused`
+- **無人実行のターン数**: `scripts/loop-run.sh` の定数
 
 ## ゲート (人間承認が必要な操作)
 

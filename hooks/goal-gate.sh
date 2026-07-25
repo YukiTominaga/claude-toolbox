@@ -12,7 +12,7 @@
 #
 # 経過時間による停止は撤廃した (docs/spec/budget-removal.md)。対話セッションでは人が
 # 見ているので時間で切る必要がなく、無人実行の歯止めは scripts/loop-run.sh が定数として
-# 持つ --max-turns が担う。
+# 持つターン数上限が担う。
 set -u
 
 # --- 再帰防止: 内側の claude -p (judge) から起動された場合は素通し ---

@@ -69,7 +69,7 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
 
 | 構成要素 | crystal での実装 |
 |---|---|
-| automations(周期実行) | 対話中は組み込みの `/loop 30m /crystal:loop next`。無人は cron / launchd から `scripts/loop-run.sh` |
+| automations(周期実行) | 対話中は組み込みの `/loop <間隔> /crystal:loop next`。無人は cron / launchd から `scripts/loop-run.sh` |
 | worktrees(並列隔離) | **組み込みに委譲**。`LOOP.md` の契約から参照するだけ |
 | skills(プロジェクト知識) | `skills/` の 11 個 + `rules/` の自動注入 |
 | connectors(MCP) | **既存の接続に委譲**。`/crystal:loop refill` は GitHub MCP を使う |
@@ -83,21 +83,24 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
   `scripts/loop-next.sh` が先頭の未着手項目を 1 件だけ返す(枯渇時は exit 3)。
   追記は `scripts/loop-add.sh` が採番するので、行を手で書かない。
   GitHub Issues は `/crystal:loop refill` で backlog に取り込む
-- **予算と暴走の歯止め**: `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が
-  台帳に記録する**(消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
+- **暴走の歯止め**: `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が
+  台帳に記録する**(記録をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
   状態を見るだけの `--check` は記録しない。
 
-  | `LOOP.md` の設定 | 役割 |
+  | 歯止め | 効く場所 |
   |---|---|
-  | `max_runs_per_day` | 1 日に回してよい回数 |
-  | `max_turns_per_run` | 暴走の歯止め。`loop-run.sh` が `--max-turns` として渡す |
+  | `max_rounds` / `max_no_progress` | 内側ループ。`.claude/goal.md` の反復上限と無進捗 |
+  | `status: paused` | 外側ループ。人が倒すスイッチで、`loop-guard.sh` が exit 1 で止める |
+  | 1 実行のターン数上限 | 無人実行のみ。`scripts/loop-run.sh` がスクリプト内の定数として持つ |
 
-  **経過時間を歯止めにしない**(撤廃済み。`docs/spec/budget-removal.md`)。対話セッションでは
-  人が見ているため、時間で切ると邪魔になるだけで暴走は防げない。
+  **予算(実行回数・経過時間)では止めない**(撤廃済み。`docs/spec/budget-removal.md`)。
+  対話セッションでは人が見ているため、回数や時間で切ると邪魔になるだけで暴走は防げない。
   **金額も歯止めにしない**。サブスクリプション(Max 等)では `total_cost_usd` はトークン数から
   計算した参考値にすぎず追加課金も発生しないので、金額で止めても意味を持たない。
-  歯止めは回数とターン数が担う。**記録は常に続ける** — 1 イテレーションの重さを測る
-  相対指標として使える(実測で 1 回 $1.7〜$3.3 相当)
+  ターン数上限を `LOOP.md` ではなくスクリプトの定数に置いているのは、`LOOP.md` がループ自身の
+  編集対象であり、そこに書いた上限は自分で緩められるため。
+  **実行回数と実費の記録は常に続ける** — 1 イテレーションの重さを測る相対指標として使える
+  (実測で 1 回 $1.7〜$3.3 相当)
 - **作業ブランチ**: `next` は項目ごとに `loop/<id>` ブランチを作って作業する。
   `main` のままだと `main` 直接コミット禁止と auto-commit の main スキップが重なり、
   **作業が一切コミットされない**ため
