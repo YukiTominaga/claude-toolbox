@@ -138,6 +138,22 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git rev-parse HEAD
     git diff HEAD -- . "$own" "$own_goal"
     git status --porcelain -- . "$own" "$own_goal"
+    # 未追跡ファイルは status に**名前しか出ない**ので、既存の未追跡ファイルへ追記しても
+    # 署名が変わらず「進んでいない」と判定される。内容も署名に含める。
+    # 通常運転では auto-commit が毎ラウンドコミットして HEAD が動くため表面化しないが、
+    # auto-commit が効かない構成 (main ブランチ / 機密パス検出で中止) では前進中に stalled になる。
+    #
+    # cksum は POSIX で、shasum (perl 同梱) や sha1sum (GNU) と違い環境を選ばない。
+    # 読むのは --exclude-standard を通ったファイルだけなので、.gitignore された
+    # ビルド成果物や node_modules は入らない。
+    # xargs は入力が空だと引数なしで cksum を起動し、cksum は標準入力を読みにいく。
+    # このフックでは stdin が既に `input=$(cat)` で読み切られているため実測では即 EOF で
+    # 返るが、それは stdin が何であるかに依存した偶然でしかない。空かどうかを先に見て、
+    # 挙動を stdin から切り離す (-r は GNU 専用で macOS では使えない)。
+    untracked=$(git ls-files --others --exclude-standard -- . "$own" "$own_goal" 2>/dev/null)
+    if [ -n "$untracked" ]; then
+      printf '%s\n' "$untracked" | tr '\n' '\0' | xargs -0 cksum 2>/dev/null
+    fi
   } 2>/dev/null | cksum | tr -d ' ')
   last_sig=$(get_field last_sig)
   no_progress=$(get_field no_progress)

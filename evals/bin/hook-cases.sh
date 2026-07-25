@@ -607,6 +607,30 @@ goal-no-progress)
   ok "無進捗の継続で stalled になる"
   ;;
 
+# 停止条件 4: 未追跡ファイルへの追記も「前進」に数える
+# git status --porcelain は未追跡ファイルの名前しか出さないので、内容を署名に含めないと
+# 既存の未追跡ファイルへの追記が見えず、前進しているのに stalled になる。
+goal-no-progress-sees-untracked)
+  init_git
+  write_goal 2 "$(date +%s)" 600
+  echo "a" >"$WORK/draft.txt" # 未追跡のまま作業する (auto-commit を通さない構成)
+
+  goalgate >/dev/null 2>&1 || ng "1 回目の exit が 0 でない"
+  [ "$(goal_field no_progress)" = "0" ] || ng "1 回目で無進捗が立った"
+
+  # 同じ未追跡ファイルに追記する。ファイル名は変わらないので status の出力も変わらない
+  echo "b" >>"$WORK/draft.txt"
+  goalgate >/dev/null 2>&1 || ng "2 回目の exit が 0 でない"
+  [ "$(goal_field no_progress)" = "0" ] ||
+    ng "未追跡ファイルへの追記が前進として数えられていない (no_progress=$(goal_field no_progress))"
+  [ "$(goal_field status)" = "active" ] || ng "前進しているのに止まった"
+
+  # 何もしなければ従来どおり停滞として検知する (検知能力を失っていないこと)
+  goalgate >/dev/null 2>&1
+  [ "$(goal_field no_progress)" = "1" ] || ng "何もしていないのに前進と数えた"
+  ok "未追跡ファイルへの追記を前進として数える"
+  ;;
+
 # 停止条件 4: ループ自身の記帳 (.claude/loop/) は「前進」に数えない
 # 判定履歴や台帳を署名に含めると、完全に停滞していても毎ラウンド署名が変わり、
 # 停止条件 4 が丸ごと死ぬ。判定履歴をプロジェクト内に移したときに実際に踏んだ回帰。
