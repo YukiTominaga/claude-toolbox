@@ -9,10 +9,10 @@
 | `skills/` | 自作スキル 11 個 |
 | `agents/` | `spec-critic`, `verifier` |
 | `commands/` | `/learn`, `/spec`, `/goal`, `/eval`, `/loop` |
-| `hooks/` | `hooks.json` + スクリプト 9 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / auto-commit / session-rules / audit-config) |
+| `hooks/` | `hooks.json` + スクリプト 8 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / auto-commit / session-rules) |
 | `scripts/` | 手動実行系スクリプト(`eval-run.sh`, `loop-add.sh`, `loop-next.sh`, `loop-guard.sh`, `loop-log.sh`) |
 | `rules/` | コーディング規約・テスト方針・検証ラダーなど(SessionStart hook `session-rules.sh` が全セッションに自動注入) |
-| `templates/` | spec / lessons / goal / eval-case / loop / backlog テンプレート |
+| `templates/` | spec / goal / eval-case / loop / backlog テンプレート |
 | `evals/` | このリポジトリ自身の eval ケース(`scripts/eval-run.sh` で実行) |
 
 > 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、`~/.claude/skills` 側でシンボリックリンクとして別管理する。
@@ -84,8 +84,13 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
   追記は `scripts/loop-add.sh` が採番するので、行を手で書かない。
   GitHub Issues は `/crystal:loop refill` で backlog に取り込む
 - **予算**: `LOOP.md` の `max_runs_per_day` / `max_minutes_per_run`。
-  `scripts/loop-guard.sh` が実行前に判定する(トークン課金額はシェルから観測できないため、
-  回数と時間で代替している)
+  `scripts/loop-guard.sh` が実行前に判定し、**通過したらゲート自身が台帳に記録する**
+  (消費をエージェントの自己申告に依存させない。途中で失敗しても開始の事実は残る)。
+  状態を見るだけの `--check` は記録しない。
+  トークン課金額はシェルから観測できないため、回数と時間で代替している
+- **作業ブランチ**: `next` は項目ごとに `loop/<id>` ブランチを作って作業する。
+  `main` のままだと `main` 直接コミット禁止と auto-commit の main スキップが重なり、
+  **作業が一切コミットされない**ため
 - **台帳 (record)**: `.claude/loop/run-log.jsonl`。書き込みは必ず `scripts/loop-log.sh` 経由。
   クラッシュやコンテキストのリセットを跨いで「何を回したか」が残る
 - **検証ラダー**: `rules/verification.md` に L1(決定的)〜 L5(人間)を定義。
@@ -205,6 +210,7 @@ claude plugin update crystal@yuki-local
   前提とする。満たさない場合は判定をスキップする(fail-open)。
 - `rules/` は SessionStart hook が注入するため、プラグインを有効化するだけで適用される。
   外部の CLAUDE.md からの参照は不要。
-- `audit-config.sh` は手動実行用スクリプトで、`hooks.json` には登録していない。
 - 外側ループの周期実行(`/loop`・Routines)と worktree による並列隔離は Claude Code の
   組み込み機能に委譲している。プラグイン側にスケジューラや worktree 管理は持たない。
+- `/crystal:loop refill` は GitHub MCP に依存する。接続が無いセッションでは、
+  ラベルを尋ねる前にその旨を報告して終了する。
