@@ -19,3 +19,4 @@
 - [x] Q-3: 判定器を構造化出力にし、コストを記録し、スタブ可能にする  <!-- priority: med -->
 - [x] Q-4: open/closed の用語衝突を解消する  <!-- priority: med -->
 - [x] Q-5: 無人実行のエントリポイントと実費予算を用意する  <!-- priority: high -->
+- [x] Q-6: README の Loop Engineering 節に、記録先4つの表を追記する  <!-- priority: med -->

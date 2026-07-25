@@ -98,6 +98,23 @@ plan mode 自体は併用してよい(未知のコードを探索しながら方
 - **検証ラダー**: `rules/verification.md` に L1(決定的)〜 L5(人間)を定義。
   タスクが許す限り低いレベルに留め、検証者は生成者から独立させる
 
+### 記録先の使い分け
+
+ループが書き残すものは 4 つのストアに分かれている。**同じことを 2 か所に書かない**。
+迷ったら「それ単体で着手できるか」で判定する — できるなら仕事(backlog)か知見(learnings)、
+できないなら発見(signals)。
+
+| ストア | 答える問い | 書く | 読む | git |
+|---|---|---|---|---|
+| `docs/backlog.md` | 何を、どの順でやるか | `scripts/loop-add.sh` | `scripts/loop-next.sh`(機械) | ✓ |
+| `docs/signals/` | 何に気づいたか(未処理) | `scripts/signal-add.sh` | `/crystal:loop next`(キュー枯渇時)、`/crystal:learn` | ✓ |
+| `.claude/learnings.md` | 確定した再利用可能な知見 | `/crystal:learn` | 人・将来のセッション | ✓ |
+| `.claude/loop/run-log.jsonl` | 何を回したか(実行の事実) | `scripts/loop-guard.sh` / `scripts/loop-log.sh` | `/crystal:loop next` の冒頭(手順 0) | ✗ ローカル |
+
+signals と learnings は重複ではなく**ライフサイクルの段階が違う**。signal は「未処理の発見」、
+learnings は「処理を終えて再利用可能になった知見」で、signal が知見になったら本文を
+learnings に書き、その signal を `status: learned` にする。
+
 ### backlog と spec の使い分け
 
 **backlog は「やる」の管理、spec は「終わった」の定義**。寿命と粒度が違うので併存する。
