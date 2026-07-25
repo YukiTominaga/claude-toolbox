@@ -38,17 +38,24 @@ closed から始め、verifier が「自分が見つけたはずの失敗」を�
 
 ## 4. 検証 (verifier)
 
-このリポジトリには npm / pytest のプロジェクトが無いため、**`stop-gate.sh` はほぼ何も
-実行しない**。自動検証は実質 `evals/` が担っている。ここを痩せさせないこと。
+このリポジトリには npm / pytest のプロジェクトが無いため、自動検証は実質 `evals/` が
+担っている。ここを痩せさせないこと。`.claude/checks.sh` が `project-checks.sh` から
+eval スイートを呼ぶので、**crystal 自身も自分の L1 ゲートを踏む**。
 
 | 対象 | レベル | 手段 |
 |---|---|---|
 | シェル / node スクリプトの構文 | L1 | `evals/cases/shell-syntax.md` |
 | マニフェストと hooks.json の妥当性 | L1 | `evals/cases/json-valid.md` |
-| loop スクリプトと goal-gate の挙動 | L1 | `evals/bin/loop-cases.sh` の各シナリオ |
+| loop スクリプトの挙動 | L1 | `evals/bin/loop-cases.sh` の各シナリオ |
+| hook 単体と hook 同士の相互作用 | L1 | `evals/bin/hook-cases.sh` の各シナリオ |
 | 上記すべて | L1 | `CLAUDE_PROJECT_DIR=$(pwd) ./scripts/eval-run.sh` |
 | 完了条件の達成 | L4 | goal-gate (Haiku 判定) |
+| Stop hook の相互作用(実 Claude Code 経由) | L3 | `./scripts/loop-smoke.sh` — **手動**。Claude Code を更新したときと Stop hook の構成を変えたときに回す |
 | 下記ゲートに該当する操作 | L5 | 人間承認 |
+
+**stalled で終わったターンのコードは未検証である**。停止条件(ラウンド上限・予算・無進捗)に
+触れたラウンドでは goal-gate が L1 検証より手前で抜けるため。stalled は人間を呼ぶ状態
+(L5 に上がる)なので、そこから先は人が確かめること。
 
 スクリプトや hook の挙動を変えたら、**対応する eval ケースを同じ変更に含める**
 (無ければ追加する)。eval が落ちないことだけでなく、**壊したときに落ちること**を

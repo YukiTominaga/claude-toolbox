@@ -142,7 +142,12 @@ Haiku で達成判定し、未達なら差し戻す。
 
   無進捗のラウンドでは判定器を呼ばずに差し戻すため、止まっている間の課金も抑えられる。
   `started_epoch` / `last_sig` は hook が自動で埋めるので手動で編集しない
-- **fail-open**: claude CLI 不在・認証失敗・出力パース失敗時は判定をスキップして通す
+- **判定器の前に L1 検証**: 停止条件を抜けたあと、判定器 (L4) を呼ぶ前に
+  `scripts/project-checks.sh`(typecheck / lint / test)を**毎ラウンド無条件で**実行し、
+  赤なら判定器を呼ばずに差し戻す。検証ラダーの安い順に並べるため、かつ
+  `stop_hook_active` で素通しする stop-gate では内側ループの L1 が抜けるため
+- **fail-open**: claude CLI 不在・認証失敗・出力パース失敗時は判定をスキップして通す。
+  ただし L1 検証は `command -v claude` より手前にあるので、CLI が無くても効く
 - 判定履歴は `~/.claude/logs/goal-gate.jsonl` に残る(/learn の素材)
 - `.claude/goal.md` は `.gitignore` に追加すること(untracked のままだと stop-gate の
   「変更なし判定」を汚染する)。`/crystal:goal` が追加を提案する
@@ -154,7 +159,11 @@ Haiku で達成判定し、未達なら差し戻す。
 
 - **動かない場面**(いずれも無条件でスキップ):
   `main` / `master` / detached HEAD、rebase・merge・cherry-pick・revert・bisect の途中、
-  git 管理下でない場合、変更が無い場合、差し戻しの往復中(`stop_hook_active`)
+  git 管理下でない場合、変更が無い場合
+- **差し戻しの往復中(`stop_hook_active`)もコミットする**。goal-gate が回す内側ループは
+  毎ラウンド差し戻すため、ここで素通しすると done 判定のラウンドまで含めて一度も
+  コミットされず、無人実行では成果がまるごと失われる。
+  ただし往復中はメッセージ生成の Haiku を呼ばず、定型メッセージにフォールバックする
 - **未追跡ファイルも含める**(`git add -A` 相当)。新規作成したファイルこそ取りこぼしやすいため。
   これは `rules/git-workflow.md` の一括 add 禁止に対する**明示的な例外**として同ファイルに記載している
 - **機密パスの検出で中止**: `.env` / `*.pem` / `*.key` / `id_rsa` / `credentials` / `.ssh/` /
@@ -175,9 +184,11 @@ Haiku で達成判定し、未達なら差し戻す。
 - `/crystal:learn` は 2 回以上再発した問題の eval ケース化を提案する
 - `crystal:verifier` は `evals/` があればランナーを実行し判定材料に含める
 
-本リポジトリ自身も `evals/cases/` を持つ(loop スクリプト・goal-gate の停止条件・
-スクリプトの構文・マニフェストの JSON 妥当性)。シナリオ本体は `evals/bin/loop-cases.sh` にあり、
-一時ディレクトリに最小プロジェクトを作って検証する。編集したら次を実行する:
+本リポジトリ自身も `evals/cases/` を持つ(loop スクリプト・hook の相互作用・
+スクリプトの構文・マニフェストの JSON 妥当性)。シナリオ本体は 2 つに分かれており、
+loop スクリプトは `evals/bin/loop-cases.sh`、hooks は `evals/bin/hook-cases.sh` にある。
+どちらも一時ディレクトリに最小プロジェクトを作り、`claude` と `npm` をスタブに
+差し替えて(課金せず決定的に)検証する。編集したら次を実行する:
 
 ```bash
 CLAUDE_PROJECT_DIR=$(pwd) ./scripts/eval-run.sh
