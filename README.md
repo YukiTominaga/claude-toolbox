@@ -16,11 +16,11 @@
 
 > 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、`~/.claude/skills` 側でシンボリックリンクとして別管理する。
 
-## インストール(ローカル)
+## インストール
 
 ```bash
-claude plugin marketplace add ~/claude-toolbox
-claude plugin install crystal@yuki-local --scope user
+claude plugin marketplace add YukiTominaga/claude-toolbox
+claude plugin install crystal@yuki --scope user
 ```
 
 新しいセッションで有効化される。以降:
@@ -64,16 +64,16 @@ Haiku で達成判定し、未達なら差し戻す。
 ```bash
 # 1. plugin.json の version をバンプする(plugin update はバージョン番号で新旧を判定する)
 # 2. marketplace のメタデータを更新
-claude plugin marketplace update yuki-local
+claude plugin marketplace update yuki
 # 3. インストール済みプラグイン本体を更新
-claude plugin update crystal@yuki-local
+claude plugin update crystal@yuki
 # 4. 新しいセッションを開いて反映
 ```
 
 ## 構成
 
 - `.claude-plugin/plugin.json` — plugin マニフェスト(`name: crystal`)
-- `.claude-plugin/marketplace.json` — ローカルマーケットプレイス定義(`name: yuki-local`)
+- `.claude-plugin/marketplace.json` — マーケットプレイス定義(`name: yuki`)
 - `hooks/hooks.json` — hooks 登録。コマンドは `${CLAUDE_PLUGIN_ROOT}/hooks/*.sh` を参照する
 
 ## 前提

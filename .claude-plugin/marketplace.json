@@ -1,11 +1,11 @@
 {
-  "name": "yuki-local",
+  "name": "yuki",
   "owner": {
     "name": "Yuki Tominaga",
     "email": "yuki.tominaga.xen@gmail.com"
   },
   "metadata": {
-    "description": "個人ローカルマーケットプレイス",
+    "description": "個人マーケットプレイス",
     "version": "0.1.0"
   },
   "plugins": [
