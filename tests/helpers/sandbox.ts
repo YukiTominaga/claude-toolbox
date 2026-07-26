@@ -41,6 +41,18 @@ export interface Sandbox {
   setJudgeResponse(judgeOutput: string, totalCostUsd?: number): void;
   /** fake claude が呼ばれた回数 */
   judgeCallCount(): number;
+  /** fake claude に渡されたプロンプト (未呼び出しなら undefined) */
+  judgePrompt(): string | undefined;
+  /** DC の検証コマンドとして実行される fake npm の終了コード (既定 0) */
+  setVerifyExitCode(code: number): void;
+  /** fake npm に stdin を読み尽くさせる (heredoc 継承バグの再現用) */
+  setVerifyConsumesStdin(on: boolean): void;
+  /** fake npm が呼ばれた回数 */
+  verifyCallCount(): number;
+  /** .claude/goal.md を git の管理下に置く */
+  trackGoalInGit(): void;
+  /** $HOME/.claude/logs/goal-gate.jsonl の中身 (無ければ空文字) */
+  readGateLog(): string;
   writeGoal(content: string): void;
   readGoal(): string;
   /**
@@ -48,7 +60,12 @@ export interface Sandbox {
    * fromSubdir: プロジェクト直下ではなくこのサブディレクトリから実行する
    *             (CLAUDE_PROJECT_DIR も渡さない。git トップレベルへのフォールバック検証用)
    */
-  run(options?: { withoutClaude?: boolean; fromSubdir?: string }): RunResult;
+  run(options?: {
+    withoutClaude?: boolean;
+    fromSubdir?: string;
+    /** 追加の環境変数 (再入ガードの検証などに使う) */
+    env?: Record<string, string>;
+  }): RunResult;
   cleanup(): void;
 }
 
@@ -69,6 +86,9 @@ export function createSandbox(goalMd: string): Sandbox {
   const responsePath = join(root, "claude-response.json");
   const promptPath = join(root, "claude-prompt.txt");
   const transcriptPath = join(root, "transcript.jsonl");
+  const npmCallsPath = join(root, "npm-calls.log");
+  const npmExitPath = join(root, "npm-exit.txt");
+  const npmStdinPath = join(root, "npm-consume-stdin");
 
   mkdirSync(join(projectDir, ".claude"), { recursive: true });
   mkdirSync(homeDir, { recursive: true });
@@ -91,6 +111,23 @@ export function createSandbox(goalMd: string): Sandbox {
   writeFileSync(fakeClaude, fake);
   chmodSync(fakeClaude, 0o755);
 
+  // fake npm: goal-gate が DC の検証コマンドを実際に実行するようになったため、
+  // サンドボックスに本物の npm を走らせないよう差し替える
+  const fakeNpm = join(binDir, "npm");
+  writeFileSync(
+    fakeNpm,
+    [
+      "#!/bin/sh",
+      `printf 'call\\n' >> '${npmCallsPath}'`,
+      // stdin を読み尽くす挙動を再現できるようにする
+      `[ -f '${npmStdinPath}' ] && cat > /dev/null`,
+      `exit "$(cat '${npmExitPath}')"`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeNpm, 0o755);
+  writeFileSync(npmExitPath, "0");
+
   return {
     projectDir,
     homeDir,
@@ -108,6 +145,36 @@ export function createSandbox(goalMd: string): Sandbox {
       return readFileSync(callsPath, "utf8").split("\n").filter(Boolean).length;
     },
 
+    judgePrompt() {
+      if (!existsSync(promptPath)) return undefined;
+      return readFileSync(promptPath, "utf8");
+    },
+
+    setVerifyExitCode(code: number) {
+      writeFileSync(npmExitPath, String(code));
+    },
+
+    setVerifyConsumesStdin(on: boolean) {
+      if (on) writeFileSync(npmStdinPath, "1");
+      else rmSync(npmStdinPath, { force: true });
+    },
+
+    verifyCallCount() {
+      if (!existsSync(npmCallsPath)) return 0;
+      return readFileSync(npmCallsPath, "utf8").split("\n").filter(Boolean).length;
+    },
+
+    trackGoalInGit() {
+      const opts = { cwd: projectDir, encoding: "utf8" as const };
+      spawnSync("git", ["add", "-f", ".claude/goal.md"], opts);
+      spawnSync("git", ["commit", "-q", "-m", "add goal"], opts);
+    },
+
+    readGateLog() {
+      const p = join(homeDir, ".claude", "logs", "goal-gate.jsonl");
+      return existsSync(p) ? readFileSync(p, "utf8") : "";
+    },
+
     writeGoal(content: string) {
       writeFileSync(goalPath, content);
     },
@@ -116,9 +183,16 @@ export function createSandbox(goalMd: string): Sandbox {
       return readFileSync(goalPath, "utf8");
     },
 
-    run(options: { withoutClaude?: boolean; fromSubdir?: string } = {}): RunResult {
+    run(
+      options: {
+        withoutClaude?: boolean;
+        fromSubdir?: string;
+        env?: Record<string, string>;
+      } = {},
+    ): RunResult {
       const env = { ...process.env };
       delete env.CRYSTAL_GOAL_JUDGE;
+      delete env.CRYSTAL_GOAL_VERIFY;
       env.HOME = homeDir;
       env.PATH = options.withoutClaude
         ? MINIMAL_PATH
@@ -132,6 +206,7 @@ export function createSandbox(goalMd: string): Sandbox {
       } else {
         env.CLAUDE_PROJECT_DIR = projectDir;
       }
+      Object.assign(env, options.env ?? {});
 
       const proc = spawnSync("bash", [GOAL_GATE], {
         cwd,
@@ -208,6 +283,8 @@ export interface StopGateCase {
   testScript?: string;
   /** .claude/goal.md の status。null なら goal.md を作らない */
   goalStatus?: "active" | "done" | null;
+  /** 完了条件に併記する検証コマンド (省略時は検証コマンドなしの DC を書く) */
+  goalVerifyCmd?: string;
   stopHookActive?: boolean;
 }
 
@@ -226,7 +303,21 @@ export function runStopGate(c: StopGateCase): { exitCode: number; stderr: string
       mkdirSync(join(root, ".claude"), { recursive: true });
       writeFileSync(
         join(root, ".claude", "goal.md"),
-        ["---", `status: ${c.goalStatus}`, "round: 1", "max_rounds: 5", "---", "# g", ""].join("\n"),
+        [
+          "---",
+          `status: ${c.goalStatus}`,
+          "round: 1",
+          "max_rounds: 5",
+          "---",
+          "# g",
+          "",
+          "## 完了条件",
+          "",
+          c.goalVerifyCmd
+            ? `- [ ] DC-1: テストが通る — 検証: \`${c.goalVerifyCmd}\` が exit 0`
+            : "- [ ] DC-1: 見た目が整っている",
+          "",
+        ].join("\n"),
       );
     }
     // 変更が無いと stop-gate はゲート不要として素通しするため、未追跡ファイルを置く
@@ -250,6 +341,14 @@ export interface SubagentCase {
   lastMessage: string;
   /** そのサブエージェントが実行した Bash コマンド */
   commands?: string[];
+  /**
+   * そのサブエージェントが Write したファイル。
+   * 変更痕跡が 1 件も無いエージェントはゲートの対象外になるため、
+   * 差し戻しを期待するケースでは必ず指定する。
+   */
+  edits?: string[];
+  /** edits を記録するツール名 (既定 Write) */
+  editTool?: "Write" | "Edit" | "MultiEdit" | "NotebookEdit";
   stopHookActive?: boolean;
   /** transcript ファイル自体を壊す (JSONL の途中行が不正なケース) */
   corruptTranscript?: boolean;
@@ -260,12 +359,24 @@ export function runSubagentGate(c: SubagentCase): { exitCode: number; stderr: st
   const root = mkdtempSync(join(tmpdir(), "subagent-gate-"));
   try {
     const transcript = join(root, "agent.jsonl");
-    const lines = (c.commands ?? []).map((command) =>
-      JSON.stringify({
-        type: "assistant",
-        message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] },
-      }),
-    );
+    const lines = [
+      ...(c.edits ?? []).map((file_path) =>
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", name: c.editTool ?? "Write", input: { file_path, content: "x" } },
+            ],
+          },
+        }),
+      ),
+      ...(c.commands ?? []).map((command) =>
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] },
+        }),
+      ),
+    ];
     if (c.corruptTranscript) lines.unshift('{"type":"assistant","message":{"con');
     writeFileSync(transcript, lines.length ? `${lines.join("\n")}\n` : "");
 

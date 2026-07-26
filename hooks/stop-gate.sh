@@ -27,6 +27,13 @@ if [ -f .claude/goal.md ] &&
   goal_active=1
 fi
 
+# goal-gate も DC の検証コマンドを実行するため同じテストが 2 度走ることがあるが、
+# ここを条件付きで無効化してはいけない。goal-gate が実際に実行するのは
+# 「## 完了条件」内にあり、かつ許可パターンに一致したコマンドだけで、
+# その判定をこちら側で正確に再現できない。両者の条件がずれると
+# 「stop-gate は goal-gate に任せたつもり、goal-gate は judge に任せたつもり」で
+# 実検証が 1 つも走らないゴールが生まれる。重複実行は許容する。
+
 # --- 再帰防止: このフックによる差し戻し後の再停止では素通しする(ゴールループ中を除く) ---
 if [ "$goal_active" = "0" ] &&
   [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then

@@ -59,10 +59,19 @@ goal-gate hook が Haiku で完了条件の達成を判定し、未達なら差�
    - frontmatter の `spec:` に取り込み元のパスを記録する
    - approved な仕様がない場合のみ、ここまでの会話とタスク内容から完了条件の草案を
      作り、ユーザーに確認する
-3. 完了条件は DC ごとに検証コマンドを必ず併記する。判定器は会話に出力された内容しか
-   読めないため、「観測可能な終了状態」と「それを証明するコマンド」をセットにすること。
+3. 完了条件は DC ごとに検証コマンドを必ず併記する。goal-gate はこのコマンドを
+   **実際に実行して**未達を機械的に確定させ、失敗していれば Haiku を呼ばずに差し戻す。
    形式は templates/goal.md に従う:
    `` - [ ] DC-1: <観測可能な終了状態> — 検証: `<コマンド>` が <期待する結果> ``
+   実行されるのは、コマンド**全体**が既定パターンに完全一致する場合だけ:
+   `npm|pnpm|yarn|bun test`、`npm run <script>`(`-s` 可、`-- <args>` 可)、
+   `npx vitest run`、`vitest run`、`jest`、`tsc --noEmit`、`pytest [-q] [path]`、
+   `ruff check <path>`、`mypy <path>`、`eslint <path>`、`shellcheck <path>`、
+   `go test ./...`、`cargo test|check|clippy`、`make test|check|lint`、
+   `mvn|gradle test|verify|check`、`git status --porcelain`、`git diff --exit-code`。
+   これ以外(`node -e` や `docker compose run` などを含む)は実行されず Haiku の読解に戻るため、
+   **可能な限りこの形に落として書くこと**が判定の精度に直結する。
+   落とせない場合は、その DC は機械判定されないことをユーザーに伝える。
    検証不能な条件(「きれいにする」等)はユーザーと具体化してから採用する
 4. 実装系の DC には、対応するテストの DC を必ず立てる
    (例: `` - [ ] DC-3: DC-1 の挙動を覆うテストがある — 検証: `npm test` が exit 0 ``)。
@@ -77,11 +86,18 @@ goal-gate hook が Haiku で完了条件の達成を判定し、未達なら差�
    `status: stalled` にならないままランタイム側で強制終了し、
    `/crystal:goal resume` の導線に乗らなくなる。
    それ以上回したい場合は、この環境変数を上げる必要があることを伝える
-7. テンプレート(templates/goal.md)の形式で `.claude/goal.md` を作成する。
+7. **人が張り付かずに回すゴールか**をユーザーに確認する。非対話(`claude -p`)や
+   `/schedule` から回す場合は、途中で人が止められないため次を満たすこと:
+   - すべての DC の検証コマンドが上記の許可リストで**実行可能な形**であること。
+     実行できないと未達の機械判定が効かず、Haiku の読解だけに戻る
+   - `max_rounds` は対話時より小さくする(差し戻し 1 回ごとにフルターンを消費するため)
+   - 確認できたら `claude -p` 用のプロンプト文面をその場で提示する
+     (例: `claude -p "ゴールを達成するまで作業を続けて"`)
+8. テンプレート(templates/goal.md)の形式で `.claude/goal.md` を作成する。
    `round: 0`、`cost_usd: 0`、`status: active`、`created:` は今日の日付
-8. `.claude/goal.md` が `.gitignore` に含まれていなければ追加を提案する
+9. `.claude/goal.md` が `.gitignore` に含まれていなければ追加を提案する
    (untracked のままだと stop-gate の「変更なし判定」を汚染するため)
-9. ゴール定義の完了を簡潔に報告し、**応答を終えずにそのまま実装に着手する**。
+10. ゴール定義の完了を簡潔に報告し、**応答を終えずにそのまま実装に着手する**。
    宣言だけで応答を終えると、その Stop で goal-gate が round=1 を消費し、
    「未達」の差し戻しという形で実装が始まってしまい、1 ラウンドを無駄にする。
    報告に含めるのは、完了条件・制約・max_rounds の要約と、

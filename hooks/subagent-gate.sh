@@ -46,6 +46,25 @@ printf '%s' "$msg" | grep -qiE "$CLAIM_RE" || exit 0
 tp=$(printf '%s' "$input" | jq -r '.agent_transcript_path // empty' 2>/dev/null)
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 
+# --- 何も変更していないエージェントは対象外 ---
+# 裏取りが要るのは「変更したうえで検証済みだと報告する」エージェントだけ。
+# CLAIM_RE は一人称の完了報告と、他人のコードについての説明文を区別できない
+# (例:「stop-gate.sh はテスト・型チェック・lint を実行し、通っていれば素通しする」は一致する)。
+# 調査・レビュー専門のエージェントは定義上ファイルを触らないため、変更痕跡の有無で切り分ける。
+# 代償: 何も変更していないエージェントの偽りの検証主張は素通しするが、
+# 何も壊していない以上、調査結果を丸ごと失わせるより害が小さい。
+edits=$(jq -Rr 'fromjson? // empty
+  | select(.type=="assistant") | .message.content[]?
+  | select(.type=="tool_use")
+  | if (.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit")
+    then .name
+    # Bash 経由の書き換え(sed -i / tee / リダイレクト / patch 等)も変更とみなす。
+    # 編集ツールを使わずにファイルを書き換えたエージェントを取りこぼさないため
+    elif .name=="Bash" and ((.input.command // "") | test("(^|[;&|(]|&&)[[:space:]]*(sudo[[:space:]]+)?(sed[[:space:]]+-[a-zA-Z]*i|perl[[:space:]]+-[a-zA-Z]*i|tee|patch|install|dd)([[:space:]]|$)|>>?[[:space:]]*[^&]|git[[:space:]]+(apply|checkout|restore|revert|stash[[:space:]]+pop)"))
+    then "Bash"
+    else empty end' "$tp" 2>/dev/null)
+[ -n "$edits" ] || exit 0
+
 # jq は JSONL の途中に壊れた行があるとその場で終了するため、行単位で読んで不正行を捨てる
 commands=$(jq -Rr 'fromjson? // empty
   | select(.type=="assistant") | .message.content[]?
