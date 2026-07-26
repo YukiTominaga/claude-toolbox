@@ -6,12 +6,32 @@ set -u
 
 input=$(cat)
 
-# --- 再帰防止: このフックによる差し戻し後の再停止では素通しする ---
-if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
-  exit 0
+# --- プロジェクトルートへ移動 ---
+# `cd .` は必ず成功するため `cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0` ではガードにならず、
+# CLAUDE_PROJECT_DIR 未設定時にカレント(モノレポのサブパッケージ等)を検証してしまう。
+# 未設定なら git のトップレベルにフォールバックする。
+project_dir="${CLAUDE_PROJECT_DIR:-}"
+if [ -z "$project_dir" ]; then
+  project_dir=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+fi
+cd "$project_dir" || exit 0
+
+# --- ゴールループ中か ---
+# goal-gate は stop_hook_active を意図的に無視して毎ターン差し戻す。
+# そのため下の素通しをそのまま適用すると、ゴールループに入った瞬間から
+# テスト・型チェック・lint の実検証が二度と走らなくなる(Haiku の見た目判定だけになる)。
+# ゴールが active の間は毎ターン検証する。
+goal_active=0
+if [ -f .claude/goal.md ] &&
+  grep -qE '^status:[[:space:]]*active[[:space:]]*$' .claude/goal.md 2>/dev/null; then
+  goal_active=1
 fi
 
-cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
+# --- 再帰防止: このフックによる差し戻し後の再停止では素通しする(ゴールループ中を除く) ---
+if [ "$goal_active" = "0" ] &&
+  [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
+  exit 0
+fi
 
 # --- git 管理下でなければ対象外 ---
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
@@ -36,7 +56,9 @@ run_check() {
 if [ -f package.json ]; then
   jq -e '.scripts.typecheck' package.json >/dev/null 2>&1 && run_check "typecheck" npm run -s typecheck
   jq -e '.scripts.lint'      package.json >/dev/null 2>&1 && run_check "lint"      npm run -s lint
-  jq -e '.scripts.test'      package.json >/dev/null 2>&1 && run_check "test"      npm test -- --silent
+  # --silent は npm 自身のフラグとして渡す。`npm test -- --silent` にすると
+  # test スクリプトの argv に --silent が注入され、引数を検査するランナーが誤って失敗する
+  jq -e '.scripts.test'      package.json >/dev/null 2>&1 && run_check "test"      npm test --silent
 fi
 
 # --- Python プロジェクト ---

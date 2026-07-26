@@ -19,7 +19,8 @@ description: プロジェクトの eval セット (evals/) を管理・実行す
 2. command 型で書けないか最初に検討する。書けない場合のみ rubric 型にする
 3. templates/eval-case.md の該当形式に沿って `evals/cases/<id>.md` を作成する
    (id はケース内容を表す kebab-case。ディレクトリがなければ作成)
-4. 作成後、`scripts/eval-run.sh <id>` で 1 回実行して動作を確認する
+4. 作成後、`"${CLAUDE_PLUGIN_ROOT}/scripts/eval-run.sh" <id>` で 1 回実行して動作を確認する
+   (ランナーはプラグイン側にしか無い。プロジェクト相対パスでは解決できない)
 5. evals/ は再発防止の資産なので、git commit をユーザーに提案する
 
 ## `run [id...]` の場合

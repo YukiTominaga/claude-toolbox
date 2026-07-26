@@ -16,6 +16,10 @@ Format: append a short dated entry —
 <2–5 lines: what happened, the fix/insight, why it matters>
 ```
 
+`.claude/learnings.md` is injected back into context at the start of every session
+(SessionStart hook), so what you write here is what a future session will actually
+read. Write it for that reader, not as a log for yourself.
+
 Rules of thumb:
 
 - Only record insights that are likely to recur. Routine work produces no entry.

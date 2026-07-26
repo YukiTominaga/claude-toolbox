@@ -6,7 +6,14 @@
 # 1 件でも FAIL があれば exit 1。claude CLI 不在時、rubric 型は SKIP になる。
 set -u
 
-cd "${CLAUDE_PROJECT_DIR:-.}" || exit 1
+# プロジェクトルートへ移動。`cd .` は必ず成功しガードにならないため、
+# CLAUDE_PROJECT_DIR 未設定時は git のトップレベルにフォールバックする
+# (サブディレクトリから叩いても evals/ を見つけられるようにする)
+project_dir="${CLAUDE_PROJECT_DIR:-}"
+if [ -z "$project_dir" ]; then
+  project_dir=$(git rev-parse --show-toplevel 2>/dev/null) || project_dir="."
+fi
+cd "$project_dir" || exit 1
 
 CASES_DIR="evals/cases"
 if [ ! -d "$CASES_DIR" ]; then
@@ -26,6 +33,22 @@ get_field() { # $1=file $2=key
 # 「## <名前>」セクションの本文を取得
 get_section() { # $1=file $2=section
   awk -v s="$2" '$0 == "## "s {f=1;next} /^## /{f=0} f' "$1"
+}
+
+# 移植性のあるタイムアウト。macOS には coreutils の timeout が無いため perl で代替する
+# (timeout が無い環境では judge が exit 127 で必ず失敗し、rubric 型が判定に到達できない)
+run_with_timeout() {
+  _secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_secs" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'alarm shift; exec @ARGV' "$_secs" "$@"
+  else
+    "$@"
+  fi
 }
 
 files=()
@@ -86,8 +109,8 @@ ${rubric}
 
 ## 対象
 ${target}"
-    result=$(printf '%s' "$prompt" | CRYSTAL_GOAL_JUDGE=1 timeout 120 \
-      claude -p --model claude-haiku-4-5-20251001 \
+    result=$(printf '%s' "$prompt" | CRYSTAL_GOAL_JUDGE=1 \
+      run_with_timeout 120 claude -p --model claude-haiku-4-5-20251001 \
       --settings '{"disableAllHooks": true}' 2>/dev/null)
     json=$result
     if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
