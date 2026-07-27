@@ -1,6 +1,6 @@
 ---
 name: unknowns-field-guide
-description: Use before writing code for ambiguous, unfamiliar, multi-step, or reviewer-sensitive implementation work. Runs a blindspot pass for unknown unknowns, explores prototypes and references, plans likely-to-change decisions first, logs deviations, explains the result, and quizzes understanding.
+description: Structured pre-implementation pass for unknown unknowns — blindspot search, prototypes and references for preferences the user can only recognize once shown, planning likely-to-change decisions first, deviation logging, and a reviewer-readiness quiz. Use only when the user explicitly asks for it by name, or asks for a "blindspot pass" / "unknown unknowns" pass before implementing. Do NOT trigger on ordinary ambiguous or multi-step implementation work: requirements definition belongs to /crystal:spec, and confirming scope before acting is already default behavior.
 ---
 
 # Unknowns Field Guide
@@ -10,6 +10,10 @@ description: Use before writing code for ambiguous, unfamiliar, multi-step, or r
 Use this skill to make hidden assumptions visible before they become expensive. The core model is simple: the prompt, plan, and artifacts are the map; the real codebase, users, constraints, and reviewers are the territory; unknowns are the gaps between them.
 
 Use it before implementation, not only after things go wrong. If the work is small and clear, run a light pass. If it is ambiguous, unfamiliar, visible to users, or likely to involve review, run the full pass.
+
+This is a deliberate, expensive pass that runs on request. It is not the default
+route into implementation work: `/crystal:spec` handles requirements definition,
+and ordinary scope confirmation needs no ceremony.
 
 ## Unknowns
 

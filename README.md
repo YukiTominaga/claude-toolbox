@@ -11,7 +11,7 @@
 | `commands/` | `/learn`, `/spec`, `/goal`, `/eval` |
 | `hooks/` | `hooks.json` + スクリプト 10 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / subagent-gate / session-rules / session-learnings / audit-config) |
 | `scripts/` | 手動実行系スクリプト(`eval-run.sh`) |
-| `rules/` | コーディング規約・テスト方針など(SessionStart hook `session-rules.sh` が全セッションに自動注入) |
+| `rules/` | テスト方針など(SessionStart hook `session-rules.sh` が全セッションに自動注入)。**hook で強制できることは書かない**方針 — [rules/ の方針](#rules-の方針) を参照 |
 | `templates/` | spec / goal / eval-case テンプレート |
 
 > 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、`~/.claude/skills` 側でシンボリックリンクとして別管理する。
@@ -44,7 +44,7 @@ claude plugin install crystal@yuki --scope user
 | Worktrees(並行エージェントの隔離) | **組み込みの `EnterWorktree` に委ねる**。本 plugin では実装しない |
 | Skills(プロジェクト固有の作業知識) | `skills/` 11 個 + `rules/`(SessionStart hook が全セッションに注入) |
 | Plugins / Connectors(外部ツール接続) | 本リポジトリ自体が plugin。MCP 接続は各プロジェクト側の設定に任せる |
-| Sub-agents(実装者と検証者の分離) | `crystal:verifier` / `crystal:spec-critic`、および `subagent-gate.sh` |
+| Sub-agents(実装者と検証者の分離) | 常時は `subagent-gate.sh` / `stop-gate.sh`(hook)。`crystal:verifier` / `crystal:spec-critic` は**明示呼び出し時のみ** |
 | 外部メモリ(実行間で状態を失わない) | `.claude/goal.md` の `## 判定履歴` / `docs/spec/` / `.claude/learnings.md`(SessionStart hook が自動注入) / `evals/` |
 
 ループ本体は Stop hook `goal-gate.sh`。`/crystal:goal` で完了条件を `.claude/goal.md` に
@@ -159,6 +159,7 @@ goal-gate が担うのは後者だけで、前者は起動方法の選択にな�
 | ファイル単位の lint / 整形 | `PostToolUse`(`lint-changed.sh` / `format-on-save.sh`) | サブエージェント内でも発火するため、変更した本人がその場で直せる |
 | 完了報告の裏取り | `SubagentStop`(`subagent-gate.sh`) | 変更したうえで「テストが通った」と主張しているのに実行痕跡が無いものだけを止める。安く済む |
 | プロジェクト全体の typecheck / test | 親の `Stop`(`stop-gate.sh`)に一本化 | 並列エージェントは既定で worktree 隔離されず同一チェックアウトを共有する。同時にフルテストを走らせるとキャッシュ破壊と CPU 飽和を招く |
+| 仕様(AC)単位の独立判定 | `crystal:verifier`(**明示呼び出し時のみ**) | 会話の文脈を持たない第三者判定。日常の完了報告で自動起動すると stop-gate / goal-gate と合わせてテストが三重に走る |
 
 `subagent-gate.sh` の挙動:
 
@@ -244,3 +245,27 @@ vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learn
   際限なく増えるので末尾 8000 バイトまでを載せ、エントリの途中で切らないよう
   見出し行から始める。切り詰めた場合はその旨を明記する。
 - `audit-config.sh` は手動実行用スクリプトで、`hooks.json` には登録していない。
+
+## rules/ の方針
+
+プラグインには native な `rules/` コンポーネントが無い(公式のコンポーネントは
+skills / agents / hooks / MCP / LSP / monitors)。そのため `session-rules.sh` で
+`SessionStart` の `additionalContext` として注入しているが、この経路には
+`.claude/rules/` のような `paths:` フロントマターによるスコープ限定が無く、
+**全ファイルが毎セッション無条件で入る**。CLAUDE.md 以上に選別が要る。
+
+採用基準は 2 つ:
+
+1. **hook で強制できることは rules に書かない。** `stop-gate.sh` が実際にテスト・
+   型チェック・lint を実行して exit 2 で差し戻す以上、「完了と報告する前に検証しろ」
+   と散文で書いても遵守率は上がらず、コンテキストを消費するだけ。
+   [Opus 5 のプロンプティングガイド](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5)
+   も、旧世代向けの検証指示("include a final verification step" 等)は
+   過剰検証を招くレガシー足場として削除を推奨している。
+2. **既定の挙動と一致することは書かない。** 「シンプルに書く」「secret を
+   ハードコードしない」「push は言われた時だけ」といった一般論は、書いても
+   振る舞いが変わらない。残すのは既定と**異なる**規約
+   (Conventional Commits の型指定、`main` に直接コミットしない、
+   2 つ目のテストフレームワークを入れない、等)に限る。
+
+判定は「この行を消したら Claude が間違えるか?」で行い、答えが No なら消す。

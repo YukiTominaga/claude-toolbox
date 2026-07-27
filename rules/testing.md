@@ -29,8 +29,3 @@
   set up infrastructure unasked.
 - Tests must fail when the behavior they cover breaks — avoid tautological
   tests (e.g., mocking the unit under test).
-
-## Reporting
-
-- Run the new/updated tests before reporting completion and include the
-  results. If no tests were written, state that explicitly with the reason.

@@ -1,30 +1,16 @@
 # Learning Capture
 
-When a task surfaces a **non-obvious, reusable insight**, append it to the
-project's `.claude/learnings.md` (create the file on first use). Capture things
-a future session — or a teammate's agent — would otherwise rediscover the hard way:
-
-- Gotchas and pitfalls specific to this project (build quirks, flaky steps,
-  hidden coupling, environment traps)
-- Decisions with non-obvious rationale ("X looks simpler but breaks Y")
-- Commands or procedures that took real effort to figure out
-
-Format: append a short dated entry —
+When a task surfaces a **non-obvious, reusable insight** — a project-specific
+gotcha, a decision with non-obvious rationale, or a procedure that took real
+effort to figure out — append a short dated entry to the project's
+`.claude/learnings.md` (create the file on first use):
 
 ```markdown
 ## 2026-06-10: <one-line title>
 <2–5 lines: what happened, the fix/insight, why it matters>
 ```
 
-`.claude/learnings.md` is injected back into context at the start of every session
-(SessionStart hook), so what you write here is what a future session will actually
-read. Write it for that reader, not as a log for yourself.
-
-Rules of thumb:
-
-- Only record insights that are likely to recur. Routine work produces no entry.
-- Don't duplicate what the repo already documents (README, CLAUDE.md, comments).
-- `.claude/learnings.md` is shared via the repository; personal, cross-project
-  insights belong in the built-in memory directory instead.
-- The `/learn` command runs a deliberate end-of-session retrospective; this rule
-  covers capturing insights inline as they happen.
+Only record insights likely to recur; routine work produces no entry. The file is
+injected back into context at session start (`session-learnings.sh`), so write it
+for that reader. `/crystal:learn` covers the deliberate end-of-session
+retrospective; this rule covers capturing insights inline as they happen.

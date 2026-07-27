@@ -41,7 +41,7 @@ description: セッションを振り返り、再利用可能な知見を抽出�
 - 今回のセッション内（同じ失敗を複数回修正した等）
 
 提案時は id / type (command 優先、主観評価のみ rubric) / run（または rubric の観点）の案を
-示し、ユーザー承認後に `evals/cases/<id>.md` を作成する。形式は templates/eval-case.md に従う。
+示し、ユーザー承認後に `evals/cases/<id>.md` を作成する。形式は `${CLAUDE_PLUGIN_ROOT}/templates/eval-case.md` に従う。
 
 ### 3. learnings.md への追記フォーマット
 

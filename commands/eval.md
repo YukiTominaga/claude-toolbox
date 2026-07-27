@@ -5,7 +5,7 @@ description: プロジェクトの eval セット (evals/) を管理・実行す
 # /eval — Eval Engineering
 
 プロジェクトの `evals/cases/*.md` (1ケース1ファイル、git で版管理) を管理・実行する。
-ケース形式は templates/eval-case.md を参照。type は 2 種類:
+ケース形式は `${CLAUDE_PLUGIN_ROOT}/templates/eval-case.md` を参照。type は 2 種類:
 
 - **command 型**: コマンド実行 + exit code / 出力の正規表現で機械的に検証。
   コマンドで検証できるものは必ずこちらを優先する
@@ -17,7 +17,7 @@ description: プロジェクトの eval セット (evals/) を管理・実行す
 
 1. 会話から題材を聞き取り、何を二度と壊したくないのか・何を保証したいのかを特定する
 2. command 型で書けないか最初に検討する。書けない場合のみ rubric 型にする
-3. templates/eval-case.md の該当形式に沿って `evals/cases/<id>.md` を作成する
+3. `${CLAUDE_PLUGIN_ROOT}/templates/eval-case.md` の該当形式に沿って `evals/cases/<id>.md` を作成する
    (id はケース内容を表す kebab-case。ディレクトリがなければ作成)
 4. 作成後、`"${CLAUDE_PLUGIN_ROOT}/scripts/eval-run.sh" <id>` で 1 回実行して動作を確認する
    (ランナーはプラグイン側にしか無い。プロジェクト相対パスでは解決できない)

@@ -61,7 +61,7 @@ goal-gate hook が Haiku で完了条件の達成を判定し、未達なら差�
      作り、ユーザーに確認する
 3. 完了条件は DC ごとに検証コマンドを必ず併記する。goal-gate はこのコマンドを
    **実際に実行して**未達を機械的に確定させ、失敗していれば Haiku を呼ばずに差し戻す。
-   形式は templates/goal.md に従う:
+   形式は `${CLAUDE_PLUGIN_ROOT}/templates/goal.md` に従う:
    `` - [ ] DC-1: <観測可能な終了状態> — 検証: `<コマンド>` が <期待する結果> ``
    実行されるのは、コマンド**全体**が既定パターンに完全一致する場合だけ:
    `npm|pnpm|yarn|bun test`、`npm run <script>`(`-s` 可、`-- <args>` 可)、
@@ -93,7 +93,7 @@ goal-gate hook が Haiku で完了条件の達成を判定し、未達なら差�
    - `max_rounds` は対話時より小さくする(差し戻し 1 回ごとにフルターンを消費するため)
    - 確認できたら `claude -p` 用のプロンプト文面をその場で提示する
      (例: `claude -p "ゴールを達成するまで作業を続けて"`)
-8. テンプレート(templates/goal.md)の形式で `.claude/goal.md` を作成する。
+8. テンプレート(`${CLAUDE_PLUGIN_ROOT}/templates/goal.md`)の形式で `.claude/goal.md` を作成する。
    `round: 0`、`cost_usd: 0`、`status: active`、`created:` は今日の日付
 9. `.claude/goal.md` が `.gitignore` に含まれていなければ追加を提案する
    (untracked のままだと stop-gate の「変更なし判定」を汚染するため)
