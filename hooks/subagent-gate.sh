@@ -77,13 +77,17 @@ commands=$(jq -Rr 'fromjson? // empty
 # 部分一致にすると git commit -m "npm test が落ちる" のような、
 # 検証コマンドを文字列として含むだけのコマンドでゲートを素通りできてしまう
 VERIFY_SEP='(^|[;&|(]|&&|\|\|)[[:space:]]*(sudo[[:space:]]+)?'
+# Python 系はランナー経由の実行が標準的 (uv run pytest / poetry run pytest /
+# python -m pytest)。プレフィックスを認めないと、正当に検証したエージェントを
+# 差し戻す誤検知になる。プレフィックス単体では通らない (後続に検証コマンドが要る)
+VERIFY_RUNNER='((uv|poetry|pipenv)[[:space:]]+run[[:space:]]+|python3?[[:space:]]+-m[[:space:]]+)?'
 VERIFY_CMD='((npm|pnpm|yarn|bun)[[:space:]]+(run[[:space:]]+)?(test|lint|typecheck|type-check|build|check)'
 VERIFY_CMD="${VERIFY_CMD}|npx[[:space:]]+(--no-install[[:space:]]+)?(vitest|jest|tsc|eslint|prettier|playwright|mocha)"
 VERIFY_CMD="${VERIFY_CMD}|(vitest|jest|pytest|tsc|eslint|ruff|mypy|shellcheck|rspec|phpunit)([[:space:]]|$)"
 VERIFY_CMD="${VERIFY_CMD}|go[[:space:]]+(test|vet)|cargo[[:space:]]+(test|check|clippy)"
 VERIFY_CMD="${VERIFY_CMD}|make[[:space:]]+(test|check|lint)|bash[[:space:]]+-n|gradle[[:space:]]+(test|check)|mvn[[:space:]]+(test|verify))"
 
-if printf '%s' "$commands" | grep -qiE "${VERIFY_SEP}${VERIFY_CMD}"; then
+if printf '%s' "$commands" | grep -qiE "${VERIFY_SEP}${VERIFY_RUNNER}${VERIFY_CMD}"; then
   exit 0
 fi
 
