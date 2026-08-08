@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runVerifyGate } from "./helpers/sandbox";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
  * verify-gate.sh は「実装しておいて独立検証を通さずに終える」ことを止めるゲート。
@@ -145,6 +150,117 @@ describe("verify-gate.sh", () => {
       });
 
       expect(r.exitCode).toBe(0);
+    });
+  });
+
+  describe("判定が不合格なら通さない", () => {
+    const FAIL = "## 判定サマリー\n満たす: 1件 / 満たさない: 1件\n\nCRYSTAL-VERDICT: FAIL AC-2, AC-5";
+
+    it("verifier が FAIL を返したら差し戻す", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "crystal:verifier", result: FAIL }],
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("独立検証が不合格です");
+    });
+
+    it("未達の条件 ID を差し戻しメッセージに載せる", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "crystal:verifier", result: FAIL }],
+      });
+
+      expect(r.stderr).toContain("AC-2, AC-5");
+    });
+
+    it("FAIL は stop_hook_active でも素通ししない", () => {
+      // 直せば PASS になるので、ここで折れると不合格のまま完了できてしまう
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "crystal:verifier", result: FAIL }],
+        stopHookActive: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("散文で「満たさない」と書かれていても、判定行が PASS なら通す", () => {
+      // 判定は 1 行の契約だけを見る。散文の読解に戻すと判定基準が曖昧になる
+      const r = runVerifyGate({
+        added: REPO,
+        events: [
+          { edit: "src/auth.ts" },
+          {
+            agent: "crystal:verifier",
+            result: "満たさない: 0件 と書いてあるが紛らわしい文章\n\nCRYSTAL-VERDICT: PASS",
+          },
+        ],
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+  });
+
+  describe("判定行が読み取れないときは詰ませない", () => {
+    // 古い verifier 定義が動いている場合に、抜けられないループを作らないこと。
+    // 「最後の変更より後に検証を回した」担保は既に取れている
+    const NO_VERDICT = "## 判定サマリー\n満たす: 2件 / 満たさない: 0件";
+
+    it("判定行が無ければ 1 度差し戻す", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "crystal:verifier", result: NO_VERDICT }],
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("判定行を読み取れませんでした");
+      expect(r.stderr).toContain("plugin update");
+    });
+
+    it("再停止では素通しする (詰ませない)", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "crystal:verifier", result: NO_VERDICT }],
+        stopHookActive: true,
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("tool_result そのものが無い場合も同じ扱いにする", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "crystal:verifier", noResult: true }],
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("判定行を読み取れませんでした");
+    });
+  });
+
+  describe("verifier との契約が両側で一致している", () => {
+    // hook が読む文字列と、verifier に出力させる文字列は別ファイルにある。
+    // 片方だけ書き換えると、判定が黙って「読み取れません」に落ちて無力化される
+    const hook = readFileSync(resolve(ROOT, "hooks/verify-gate.sh"), "utf8");
+    const agent = readFileSync(resolve(ROOT, "agents/verifier.md"), "utf8");
+
+    it("番兵の文字列が hook と verifier の定義で一致している", () => {
+      expect(hook).toContain("CRYSTAL-VERDICT:");
+      expect(agent).toContain("CRYSTAL-VERDICT: PASS");
+      expect(agent).toContain("CRYSTAL-VERDICT: FAIL");
+    });
+
+    it("verifier の定義が出力する判定行を、hook の正規表現が実際に拾える", () => {
+      const re = /^\s*CRYSTAL-VERDICT:\s*(PASS|FAIL)/;
+      const lines = agent
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith("CRYSTAL-VERDICT:"));
+
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) expect(line).toMatch(re);
     });
   });
 

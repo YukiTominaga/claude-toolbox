@@ -138,10 +138,17 @@ export function runChangeGate(c: ChangeGateCase): { exitCode: number; stderr: st
   }
 }
 
-/** transcript に並べる印。実際の tool_use レコードに展開される */
+/** transcript に並べる印。実際の tool_use / tool_result レコードに展開される */
 export type TranscriptEvent =
   | { edit: string; tool?: "Write" | "Edit" | "MultiEdit" | "NotebookEdit" }
-  | { agent: string; tool?: "Agent" | "Task" };
+  | {
+      agent: string;
+      tool?: "Agent" | "Task";
+      /** そのサブエージェントが返した本文 (既定は合格判定) */
+      result?: string;
+      /** tool_result レコード自体を作らない (応答が取れていない状況) */
+      noResult?: boolean;
+    };
 
 export interface VerifyGateCase {
   /** 作業ツリーに置くファイル (未追跡として現れる) */
@@ -152,9 +159,13 @@ export interface VerifyGateCase {
   noTranscript?: boolean;
   /** JSONL の先頭に壊れた行を混ぜる */
   corruptTranscript?: boolean;
+  stopHookActive?: boolean;
   env?: Record<string, string>;
   noGit?: boolean;
 }
+
+/** verifier が返す既定の本文 (合格) */
+const VERIFIER_PASS = "## 判定サマリー\n満たす: 2件 / 満たさない: 0件\n\nCRYSTAL-VERDICT: PASS";
 
 /** verify-gate.sh を使い捨ての git リポジトリで実行する */
 export function runVerifyGate(c: VerifyGateCase): { exitCode: number; stderr: string } {
@@ -167,33 +178,56 @@ export function runVerifyGate(c: VerifyGateCase): { exitCode: number; stderr: st
     if (!c.noTranscript) {
       // 編集ツールの file_path は絶対パスで記録される。
       // 相対パスで書くと、プロジェクトルートを剥がす処理を検証できない
-      const lines = (c.events ?? []).map((e) =>
-        "edit" in e
-          ? JSON.stringify({
+      const lines = (c.events ?? []).flatMap((e, i) => {
+        const id = `toolu_${i}`;
+        if ("edit" in e) {
+          return [
+            JSON.stringify({
               type: "assistant",
               message: {
                 content: [
                   {
                     type: "tool_use",
+                    id,
                     name: e.tool ?? "Edit",
                     input: { file_path: join(root, e.edit) },
                   },
                 ],
               },
-            })
-          : JSON.stringify({
-              type: "assistant",
-              message: {
-                content: [
-                  {
-                    type: "tool_use",
-                    name: e.tool ?? "Agent",
-                    input: { subagent_type: e.agent, prompt: "x" },
-                  },
-                ],
-              },
             }),
-      );
+          ];
+        }
+        const call = JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              {
+                type: "tool_use",
+                id,
+                name: e.tool ?? "Agent",
+                input: { subagent_type: e.agent, prompt: "x" },
+              },
+            ],
+          },
+        });
+        if (e.noResult) return [call];
+        // サブエージェントの戻り値は tool_result として親の transcript に載る
+        return [
+          call,
+          JSON.stringify({
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: id,
+                  content: [{ type: "text", text: e.result ?? VERIFIER_PASS }],
+                },
+              ],
+            },
+          }),
+        ];
+      });
       if (c.corruptTranscript) lines.unshift('{"type":"assistant","message":{"con');
       writeFileSync(transcript, lines.length ? `${lines.join("\n")}\n` : "");
     }
@@ -201,7 +235,10 @@ export function runVerifyGate(c: VerifyGateCase): { exitCode: number; stderr: st
     const proc = spawnSync("bash", [VERIFY_GATE], {
       cwd: root,
       env: { ...process.env, CLAUDE_PROJECT_DIR: root, ...(c.env ?? {}) },
-      input: JSON.stringify({ transcript_path: transcript }),
+      input: JSON.stringify({
+        transcript_path: transcript,
+        stop_hook_active: c.stopHookActive ?? false,
+      }),
       encoding: "utf8",
     });
 

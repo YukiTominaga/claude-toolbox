@@ -65,6 +65,8 @@ tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 # 変更痕跡はコードファイルへの編集だけを数える。docs/spec/ のステータス更新や
 # README の修正で「検証が無効になった」とみなすと、検証直後に必ず差し戻されて
 # 抜けられなくなる。設定ファイルも同じ理由で数えない。
+# VERIFY の印には tool_use の id を添える。あとで対応する tool_result
+# (= verifier が返した本文) を引くために要る。
 marker=$(jq -Rr --arg code "$CODE_RE" --arg config "$CONFIG_RE" --arg spec "$SPEC_RE" \
   --arg root "$project_dir" '
   fromjson? // empty
@@ -72,7 +74,7 @@ marker=$(jq -Rr --arg code "$CODE_RE" --arg config "$CONFIG_RE" --arg spec "$SPE
   | select(.type=="tool_use")
   | if ((.name=="Task" or .name=="Agent")
         and (((.input.subagent_type // "") | test("verifier"))))
-    then "VERIFY"
+    then "VERIFY\t" + (.id // "")
     elif (.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit")
     then ((.input.file_path // "") | ltrimstr($root + "/")
           | if test($spec) then empty
@@ -81,21 +83,75 @@ marker=$(jq -Rr --arg code "$CODE_RE" --arg config "$CONFIG_RE" --arg spec "$SPE
             else empty end)
     else empty end' "$tp" 2>/dev/null | tail -n 1)
 
-# VERIFY が最後 = 最後の変更より後に検証している
-[ "$marker" = "VERIFY" ] && exit 0
+TAB=$(printf '\t')
+kind=${marker%%"$TAB"*}
+verify_id=""
+case "$marker" in *"$TAB"*) verify_id=${marker#*"$TAB"} ;; esac
 
 # 印が 1 つも無い = このセッションはコードを触っていない (作業ツリーが元から汚れている、
 # Bash 経由で書き換えた等)。このゲートの対象は「このセッションで実装した人」なので素通しする。
 [ -n "$marker" ] || exit 0
 
+# --- 最後の印が変更なら、そもそも検証していない ---
+if [ "$kind" != "VERIFY" ]; then
+  {
+    printf '独立検証が済んでいません。\n'
+    printf 'このセッションで実装コードを変更しましたが、最後の変更より後に crystal:verifier を呼んでいません。\n'
+    printf '\n応答を終える前に、crystal:verifier サブエージェントを呼び、docs/spec/ の受け入れ条件に対する判定を受けること。\n'
+    printf 'verifier は会話の経緯を引き継がず、仕様と実際の実行結果だけで判定します。\n'
+    printf '\n変更した実装ファイル:\n'
+    printf '%s\n' "$impl" | head -n 10 | sed 's/^/  - /'
+  } >&2
+  exit 2
+fi
+
+# --- 検証は回っている。その判定が合格かを見る ---
+# verifier は本文の末尾に判定行を 1 行返す契約になっている (agents/verifier.md)。
+# 自由記述の要約を読み解くのではなく、この 1 行だけを見る。
+# 契約が守られているかは tests/verify-gate.test.ts が agents/verifier.md 側と突き合わせる
+# (片方だけ書き換えると、ここが黙って無力化されるのを防ぐため)。
+VERDICT_RE='^[[:space:]]*CRYSTAL-VERDICT:[[:space:]]*(PASS|FAIL)'
+
+result=$(jq -Rr --arg id "$verify_id" '
+  fromjson? // empty
+  | select(.type=="user") | .message.content[]?
+  | select(.type=="tool_result" and .tool_use_id==$id)
+  | if (.content | type) == "array"
+    then (.content[]? | select(.type=="text") | .text)
+    else (.content // "") end' "$tp" 2>/dev/null)
+
+verdict_line=$(printf '%s\n' "$result" | grep -E "$VERDICT_RE" | tail -n 1)
+
+# --- 判定行が無い ---
+# verifier の応答が取れていない、または古い定義の verifier が動いている。
+# ここだけは stop_hook_active を尊重して 1 度で諦める。詰ませてまで守る性質のものではなく、
+# 「最後の変更より後に検証を回した」という担保は既に取れているため。
+if [ -z "$verdict_line" ]; then
+  if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
+    exit 0
+  fi
+  {
+    printf 'crystal:verifier の判定行を読み取れませんでした。\n'
+    printf 'verifier は本文の末尾に "CRYSTAL-VERDICT: PASS" または "CRYSTAL-VERDICT: FAIL <未達の条件>" を\n'
+    printf '1 行返す契約です。返っていない場合、インストール済みの crystal が古い可能性があります\n'
+    printf '(claude plugin update crystal@yuki)。\n'
+    printf '\nverifier の報告を自分で確認し、受け入れ条件を満たしていない項目があれば修正すること。\n'
+    printf '確認済みで問題なければ、そのまま応答を終えれば通ります。\n'
+  } >&2
+  exit 2
+fi
+
+case "$verdict_line" in
+*PASS*) exit 0 ;;
+esac
+
+detail=$(printf '%s' "$verdict_line" | sed -E 's/^[[:space:]]*CRYSTAL-VERDICT:[[:space:]]*FAIL[[:space:]]*//')
 {
-  printf '独立検証が済んでいません。\n'
-  printf 'このセッションで実装コードを変更しましたが、最後の変更より後に crystal:verifier を呼んでいません。\n'
-  printf '\n応答を終える前に、crystal:verifier サブエージェントを呼び、docs/spec/ の受け入れ条件に対する判定を受けること。\n'
-  printf 'verifier は会話の経緯を引き継がず、仕様と実際の実行結果だけで判定します。\n'
-  printf '\n判定が「満たさない」だった条件は、修正してから再度 verifier を通すこと\n'
-  printf '(修正するとその変更が最後の印になるため、再検証が必要になります)。\n'
-  printf '\n変更した実装ファイル:\n'
-  printf '%s\n' "$impl" | head -n 10 | sed 's/^/  - /'
+  printf '独立検証が不合格です。\n'
+  printf 'crystal:verifier は docs/spec/ の受け入れ条件を満たしていないと判定しました。\n'
+  [ -n "$detail" ] && printf '未達: %s\n' "$detail"
+  printf '\nverifier の報告にある「満たさない」「未検証」の項目を解消してから、再度 verifier を通すこと。\n'
+  printf '仕様の側が実態と合っていない場合は、docs/spec/ を直すのが正しい解決になることもあります。\n'
+  printf '(このゲートを一時的に外す場合は CRYSTAL_VERIFY_GATE=off)\n'
 } >&2
 exit 2

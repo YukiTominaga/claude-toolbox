@@ -49,6 +49,30 @@
 - 影響範囲: `hooks/verify-gate.sh`(新規), `hooks/lib/classify.sh`(新規), `hooks/hooks.json`,
   `hooks/change-gate.sh`, `agents/verifier.md`, `tests/verify-gate.test.ts`
 
+## 2026-08-08: verifier の合否は「番兵 1 行」で読む
+
+- 決めたこと: verifier に本文末尾で `CRYSTAL-VERDICT: PASS` / `CRYSTAL-VERDICT: FAIL <条件ID>`
+  を 1 行返させ、`verify-gate.sh` は対応する `tool_result` からその 1 行だけを読む。
+  FAIL なら差し戻す。判定行が読めないときだけ `stop_hook_active` を尊重して 1 度で諦める。
+- 理由: 「検証を回したか」だけでは、verifier が「満たさない」と言っているのを無視して
+  完了できてしまう。当初は「出力形式に依存すると書式変更で静かに壊れる」ことを理由に
+  合否判定を見送っていたが、壊れ方を静かでなくすれば解決する問題だった。
+  番兵の一致を `tests/verify-gate.test.ts` が hook と `agents/verifier.md` の両方を
+  読んで検査するため、書式を変えるとテストが落ちる。
+- 採らなかった案:
+  - **判定サマリー(`満たさない: N件`)を正規表現で読む**: 自由記述の一部なので、
+    verifier が言い回しを変えるたびに壊れる。本文に紛らわしい文字列があると誤判定もする
+    (実際に「満たさない: 0件 と書いてあるが紛らわしい文章」で回帰テストを置いた)。
+  - **verifier に判定 JSON をファイルへ書かせる**: 書き忘れると差し戻しが続き、
+    書き忘れを直す手段が verifier 側にしかないため抜けられなくなる。
+  - **受け入れ条件そのものを機械実行する**(AC に検証コマンドを併記して exit code で判定):
+    削除した goal-gate の DC 検証と同じ機構が戻る。判定は verifier に委ね、
+    ゲートはその結論だけを読む形に留めた。
+  - **判定行が無い場合も詰まるまで差し戻す**: 古い crystal がインストールされていると
+    判定行が返らず、`claude plugin update` を打つ前に応答を終えられなくなる。
+- 影響範囲: `hooks/verify-gate.sh`, `agents/verifier.md`, `tests/verify-gate.test.ts`,
+  `docs/spec/verify-gate.md`
+
 ## 2026-08-08: 目的 2・4 のゲートは「1 度だけ差し戻す」形にする
 
 - 決めたこと: `change-gate.sh` は `stop_hook_active` の再停止で素通しする。
