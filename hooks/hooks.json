@@ -35,6 +35,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/record-subagent-edits.sh\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-gate.sh\"",
             "timeout": 60
           }
