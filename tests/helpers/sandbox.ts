@@ -19,6 +19,8 @@ export const GOAL_GATE = resolve(HERE, "../../hooks/goal-gate.sh");
 export const SUBAGENT_GATE = resolve(HERE, "../../hooks/subagent-gate.sh");
 export const STOP_GATE = resolve(HERE, "../../hooks/stop-gate.sh");
 export const SESSION_LEARNINGS = resolve(HERE, "../../hooks/session-learnings.sh");
+export const ADR_LINT = resolve(HERE, "../../scripts/adr-lint.sh");
+export const EVAL_RUN = resolve(HERE, "../../scripts/eval-run.sh");
 
 /** claude / node などが載っていない最小 PATH (CLI 不在の状況を作るため) */
 const MINIMAL_PATH = "/usr/bin:/bin";
@@ -273,6 +275,52 @@ export function runSessionLearnings(learnings?: string): {
       context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
     }
     return { exitCode: proc.status ?? -1, stdout, stderr: proc.stderr ?? "", context };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * adr-lint.sh を使い捨てディレクトリで実行する。
+ * files のキーは docs/adr/ 配下のファイル名、値はその中身。
+ * dir を渡すと docs/adr 以外を検査対象にする (ディレクトリ不在の検証用)。
+ */
+export function runAdrLint(
+  files: Record<string, string>,
+  dir?: string,
+): { exitCode: number; stdout: string } {
+  const root = mkdtempSync(join(tmpdir(), "adr-lint-"));
+  try {
+    const adrDir = join(root, "docs", "adr");
+    mkdirSync(adrDir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(join(adrDir, name), content);
+    }
+
+    const proc = spawnSync("bash", dir ? [ADR_LINT, dir] : [ADR_LINT], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    return { exitCode: proc.status ?? -1, stdout: proc.stdout ?? "" };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** eval-run.sh を、ケース 1 件だけを置いた使い捨てリポジトリで実行する */
+export function runEvalRun(caseMd: string, id = "c1"): { exitCode: number; stdout: string } {
+  const root = mkdtempSync(join(tmpdir(), "eval-run-"));
+  try {
+    gitInit(root);
+    mkdirSync(join(root, "evals", "cases"), { recursive: true });
+    writeFileSync(join(root, "evals", "cases", `${id}.md`), caseMd);
+
+    const proc = spawnSync("bash", [EVAL_RUN], {
+      cwd: root,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+      encoding: "utf8",
+    });
+    return { exitCode: proc.status ?? -1, stdout: proc.stdout ?? "" };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
