@@ -8,6 +8,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** テスト対象の hook 本体 */
 export const CHANGE_GATE = resolve(HERE, "../../hooks/change-gate.sh");
+export const VERIFY_GATE = resolve(HERE, "../../hooks/verify-gate.sh");
 export const SUBAGENT_GATE = resolve(HERE, "../../hooks/subagent-gate.sh");
 export const STOP_GATE = resolve(HERE, "../../hooks/stop-gate.sh");
 export const SESSION_LEARNINGS = resolve(HERE, "../../hooks/session-learnings.sh");
@@ -128,6 +129,79 @@ export function runChangeGate(c: ChangeGateCase): { exitCode: number; stderr: st
       cwd: root,
       env: { ...process.env, CLAUDE_PROJECT_DIR: root, ...(c.env ?? {}) },
       input: JSON.stringify({ stop_hook_active: c.stopHookActive ?? false }),
+      encoding: "utf8",
+    });
+
+    return { exitCode: proc.status ?? -1, stderr: proc.stderr ?? "" };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** transcript に並べる印。実際の tool_use レコードに展開される */
+export type TranscriptEvent =
+  | { edit: string; tool?: "Write" | "Edit" | "MultiEdit" | "NotebookEdit" }
+  | { agent: string; tool?: "Agent" | "Task" };
+
+export interface VerifyGateCase {
+  /** 作業ツリーに置くファイル (未追跡として現れる) */
+  added?: Record<string, string>;
+  /** transcript に記録されたツール呼び出しの並び (時系列) */
+  events?: TranscriptEvent[];
+  /** transcript ファイル自体を作らない */
+  noTranscript?: boolean;
+  /** JSONL の先頭に壊れた行を混ぜる */
+  corruptTranscript?: boolean;
+  env?: Record<string, string>;
+  noGit?: boolean;
+}
+
+/** verify-gate.sh を使い捨ての git リポジトリで実行する */
+export function runVerifyGate(c: VerifyGateCase): { exitCode: number; stderr: string } {
+  const root = mkdtempSync(join(tmpdir(), "verify-gate-"));
+  try {
+    if (!c.noGit) gitInit(root);
+    if (c.added) writeAll(root, c.added);
+
+    const transcript = join(root, "transcript.jsonl");
+    if (!c.noTranscript) {
+      // 編集ツールの file_path は絶対パスで記録される。
+      // 相対パスで書くと、プロジェクトルートを剥がす処理を検証できない
+      const lines = (c.events ?? []).map((e) =>
+        "edit" in e
+          ? JSON.stringify({
+              type: "assistant",
+              message: {
+                content: [
+                  {
+                    type: "tool_use",
+                    name: e.tool ?? "Edit",
+                    input: { file_path: join(root, e.edit) },
+                  },
+                ],
+              },
+            })
+          : JSON.stringify({
+              type: "assistant",
+              message: {
+                content: [
+                  {
+                    type: "tool_use",
+                    name: e.tool ?? "Agent",
+                    input: { subagent_type: e.agent, prompt: "x" },
+                  },
+                ],
+              },
+            }),
+      );
+      if (c.corruptTranscript) lines.unshift('{"type":"assistant","message":{"con');
+      writeFileSync(transcript, lines.length ? `${lines.join("\n")}\n` : "");
+    }
+
+    const proc = spawnSync("bash", [VERIFY_GATE], {
+      cwd: root,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: root, ...(c.env ?? {}) },
+      input: JSON.stringify({ transcript_path: transcript }),
       encoding: "utf8",
     });
 

@@ -10,7 +10,7 @@ crystal のハーネス部分は、次の 5 つだけを目的にしている。
 |---|---|---|
 | 1. 決定の理由を ADR に残す | `rules/decision-log.md` → `.claude/decisions.md` → `/crystal:adr` → `docs/adr/` + `adr-lint.sh` | 構造は機械検証 |
 | 2. 実装と対になる spec が作られる | `/crystal:spec` → `docs/spec/` + `crystal:spec-critic` | `change-gate.sh` |
-| 3. 実装とは別の文脈で検証する | `crystal:verifier`(明示呼び出し) + `subagent-gate.sh` | — |
+| 3. 実装とは別の文脈で検証する | `crystal:verifier` + `subagent-gate.sh` | `verify-gate.sh` |
 | 4. 実装と対になるテストが必ず書かれる | `rules/testing.md` + `stop-gate.sh` | `change-gate.sh` |
 | 5. 学びが次のセッションに残る | `rules/learning.md` + `/crystal:learn` → `.claude/learnings.md` → `session-learnings.sh` | — |
 
@@ -21,7 +21,7 @@ crystal のハーネス部分は、次の 5 つだけを目的にしている。
 | `skills/` | 自作スキル 11 個(ドメイン知識。ハーネスとは独立) |
 | `agents/` | `spec-critic`(目的 2), `verifier`(目的 3) |
 | `commands/` | `/spec`(2), `/learn`(5), `/adr`(1) |
-| `hooks/` | `hooks.json` + スクリプト 6 本 |
+| `hooks/` | `hooks.json` + スクリプト 8 本 + 共有ライブラリ `lib/classify.sh` |
 | `scripts/` | `adr-lint.sh`(目的 1 の構造検証) |
 | `rules/` | `testing.md`(4) / `learning.md`(5) / `decision-log.md`(1)。SessionStart hook が全セッションに注入 |
 | `templates/` | `spec.md`(2), `adr.md`(1) |
@@ -33,9 +33,14 @@ hook の内訳:
 | `session-rules.sh` | SessionStart | `rules/*.md` を注入 |
 | `session-learnings.sh` | SessionStart | `.claude/learnings.md` を注入(目的 5 の回収) |
 | `change-gate.sh` | Stop | 実装に対するテスト / spec の欠落を差し戻す(目的 2・4) |
+| `verify-gate.sh` | Stop | 独立検証を通していない実装を差し戻す(目的 3) |
 | `stop-gate.sh` | Stop | 変更があればテスト・型チェック・lint を実行して差し戻す |
 | `subagent-gate.sh` | SubagentStop | 検証済みという完了報告の裏取り(目的 3 の補助) |
 | `format-on-save.sh` / `lint-changed.sh` | PostToolUse | 編集したファイルの整形と lint |
+
+分類の正規表現(何が実装で何がテストか)は `hooks/lib/classify.sh` に 1 つだけ置き、
+`change-gate.sh` と `verify-gate.sh` が source する。2 つに書き写すと必ず片方だけ
+直された状態が生まれる。
 
 > 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、
 > `~/.claude/skills` 側でシンボリックリンクとして別管理する。
@@ -61,7 +66,7 @@ claude plugin install crystal@yuki --scope user
 /crystal:spec <機能>   要件を詰める → 承認したら ステータス: approved に昇格
   ↓ 実装 (実装 + テスト + spec の 3 点が揃うまで change-gate が差し戻す)
   ↓ stop-gate が毎ターン テスト / 型チェック / lint を実行
-crystal:verifier       別文脈での独立検証 (明示的に呼ぶ)
+crystal:verifier       別文脈での独立検証 (verify-gate が呼ぶまで応答を終えさせない)
 /crystal:learn         知見を .claude/learnings.md に落とす
 /crystal:adr <テーマ>  「なぜこの構成にしたか」を docs/adr/ に残す (決定をした回だけ)
 ```
@@ -105,6 +110,50 @@ exit 2 で差し戻す:
 除かないと「仕様を書いた = テストも書いた」ことになり、目的 4 のゲートが黙って死ぬ
 (回帰テストあり)。
 
+## 独立検証を強制する (`verify-gate.sh`)
+
+目的 3 は「実装した文脈のまま自己申告で終える」ことを止めるためにある。
+呼び出しの有無は機械判定できるので、散文ではなくここに置いてある。
+
+Stop のたびにメインセッションの transcript を読み、時系列に並ぶ 2 種類の印だけを取る:
+
+| 印 | 何から取るか |
+|---|---|
+| `EDIT` | `Write` / `Edit` / `MultiEdit` / `NotebookEdit` の `tool_use`(コードファイルのみ) |
+| `VERIFY` | `Agent`(ビルドにより `Task`)の `tool_use` で `subagent_type` が `verifier` を含むもの |
+
+**最後に現れた印が `VERIFY` でなければ差し戻す。** 「最後の変更より後に検証したか」を
+これだけで判定できる。
+
+- **`stop_hook_active` では素通ししない**(change-gate との意図的な設計差)。
+  免除の余地がほとんど無く、verifier を呼べばその時点で印が `VERIFY` になって
+  自然に通るため、ループにはならない
+- **`Agent` と `Task` の両方を受ける。** サブエージェント起動ツールの名前は
+  Claude Code のビルドによって変わる。片方だけを見ているとある日静かに無効化される
+- **`docs/spec/` に仕様が 1 つも無ければ発火しない。** verifier は仕様の受け入れ条件を
+  根拠に判定するため、仕様が無い状態で呼んでも「検証不能」しか返らず、
+  差し戻しても状況が変わらない = 抜けられないループになる
+- **検証後の `docs/spec/` 更新・設定ファイル更新は再検証を要求しない。**
+  仕様のステータスを `approved` → `done` に変えただけで差し戻されると、
+  「検証 → 仕様更新 → 差し戻し」で抜けられなくなる
+- **`file_path` はプロジェクトルートを剥がしてから分類する。** 剥がさないと
+  `/home/me/specs/proj/src/a.ts` のような親ディレクトリ名に引きずられる
+- **Bash 経由の書き換え(`sed -i` 等)は取りこぼす。** リダイレクトを変更とみなすと
+  ログ出力のたびに再検証を要求することになり、誤検出の害の方が大きい
+- **担保するのは「独立検証を経たこと」であって「合格したこと」ではない。**
+  verifier の判定が「満たさない」でもゲート自体は通る。判定内容まで見ると
+  hook が verifier の出力形式に依存し、書式を変えた瞬間に静かに壊れる
+- `CRYSTAL_VERIFY_GATE=off` で無効化できる
+
+サブエージェントは**別セッションではない**。同一セッション・同一ワークツリーで動く。
+得られるのは「会話の経緯を引き継がない独立コンテキストが、仕様と実行結果だけで判定する」
+という性質までで、実装が汚したツリーを見る点は残る。`claude -p` で本当に別プロセスを
+起こす案は、コストと認証環境依存、判定結果を会話へ戻す経路が stderr しか無いことから
+採らなかった。
+
+`stop-gate.sh` と verifier でテストが二重に走る。verifier が動くのは「実装を変更した
+まとまりごとに 1 回」なので許容している。
+
 ## 並行エージェント実行時の検証
 
 サブエージェントを並列で走らせるとき、検証をどの層で走らせるかを分けている。
@@ -114,7 +163,7 @@ exit 2 で差し戻す:
 | ファイル単位の lint / 整形 | `PostToolUse`(`lint-changed.sh` / `format-on-save.sh`) | サブエージェント内でも発火するため、変更した本人がその場で直せる |
 | 完了報告の裏取り | `SubagentStop`(`subagent-gate.sh`) | 変更したうえで「テストが通った」と主張しているのに実行痕跡が無いものだけを止める。安く済む |
 | プロジェクト全体の typecheck / test | 親の `Stop`(`stop-gate.sh`) | 並列エージェントは既定で worktree 隔離されず同一チェックアウトを共有する。同時にフルテストを走らせるとキャッシュ破壊と CPU 飽和を招く |
-| 仕様(AC)単位の独立判定 | `crystal:verifier`(**明示呼び出し時のみ**) | 会話の文脈を持たない第三者判定。日常の完了報告で自動起動すると stop-gate と合わせてテストが二重に走る |
+| 仕様(AC)単位の独立判定 | `crystal:verifier`(`verify-gate.sh` が強制) | 会話の文脈を持たない第三者判定。実装を変更したまとまりごとに 1 回だけ走る |
 
 `subagent-gate.sh` の挙動:
 
@@ -221,7 +270,7 @@ npm install
 npm test
 ```
 
-vitest で `change-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` /
+vitest で `change-gate.sh` / `verify-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` /
 `adr-lint.sh` の振る舞いをテストしている。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
 壊れても手動 E2E では気づけない。`change-gate.sh` と `adr-lint.sh` は逆に**誤検出しないこと**が
 要件で、ドキュメント修正のたびにテストを要求するようになるとゲートごと無視されるため、

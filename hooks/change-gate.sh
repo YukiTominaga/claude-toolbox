@@ -34,36 +34,13 @@ fi
 cd "$project_dir" || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
-# --- 変更ファイルの一覧 (作業ツリー + index + 未追跡) ---
-# 初回コミット前は HEAD が無く `git diff HEAD` が失敗するが、未追跡分だけで判定できる。
-changed=$(
-  {
-    git diff --name-only HEAD 2>/dev/null
-    git diff --cached --name-only 2>/dev/null
-    git ls-files --others --exclude-standard 2>/dev/null
-  } | sed '/^$/d' | sort -u
-)
+# 分類の定義は verify-gate.sh と共有する (hooks/lib/classify.sh)
+. "$(dirname "${BASH_SOURCE[0]}")/lib/classify.sh"
+
+changed=$(changed_files)
 [ -n "$changed" ] || exit 0
 
-# テストコードとみなすパス。
-# 実装をテスト扱いに誤分類すると差し戻しが甘くなるだけなので、広めに取る。
-TEST_RE='(^|/)(tests?|__tests__|specs?|e2e)/'
-TEST_RE="${TEST_RE}|(^|/)test_[^/]*\.[A-Za-z0-9]+\$"
-TEST_RE="${TEST_RE}|[._-](test|spec)\.[A-Za-z0-9]+\$"
-TEST_RE="${TEST_RE}|(^|/)conftest\.py\$"
-TEST_RE="${TEST_RE}|Tests?\.(java|kt|cs|scala)\$"
-
-# 設定ファイルは実装にもテストにも数えない。
-# ここを実装に数えると、lint 設定を 1 行直しただけでテストを要求してしまう。
-CONFIG_RE='(^|/)[^/]*\.config\.[A-Za-z0-9]+$'
-CONFIG_RE="${CONFIG_RE}|(^|/)\.[A-Za-z0-9]+rc(\.[A-Za-z0-9]+)?\$"
-
-# 実装コードとみなす拡張子
-IMPL_RE='\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|kts|swift|m|mm|c|cc|cpp|cxx|h|hpp|cs|scala|php|ex|exs|dart|vue|svelte|sh|bash|zsh)$'
-
-SPEC_RE='^docs/specs?/.+\.md$'
-
-impl=$(printf '%s\n' "$changed" | grep -E "$IMPL_RE" | grep -Ev "$TEST_RE" | grep -Ev "$CONFIG_RE")
+impl=$(impl_files "$changed")
 [ -n "$impl" ] || exit 0
 
 specs=$(printf '%s\n' "$changed" | grep -E "$SPEC_RE")
