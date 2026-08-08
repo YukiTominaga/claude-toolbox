@@ -16,27 +16,8 @@ if [ -z "$project_dir" ]; then
 fi
 cd "$project_dir" || exit 0
 
-# --- ゴールループ中か ---
-# goal-gate は stop_hook_active を意図的に無視して毎ターン差し戻す。
-# そのため下の素通しをそのまま適用すると、ゴールループに入った瞬間から
-# テスト・型チェック・lint の実検証が二度と走らなくなる(Haiku の見た目判定だけになる)。
-# ゴールが active の間は毎ターン検証する。
-goal_active=0
-if [ -f .claude/goal.md ] &&
-  grep -qE '^status:[[:space:]]*active[[:space:]]*$' .claude/goal.md 2>/dev/null; then
-  goal_active=1
-fi
-
-# goal-gate も DC の検証コマンドを実行するため同じテストが 2 度走ることがあるが、
-# ここを条件付きで無効化してはいけない。goal-gate が実際に実行するのは
-# 「## 完了条件」内にあり、かつ許可パターンに一致したコマンドだけで、
-# その判定をこちら側で正確に再現できない。両者の条件がずれると
-# 「stop-gate は goal-gate に任せたつもり、goal-gate は judge に任せたつもり」で
-# 実検証が 1 つも走らないゴールが生まれる。重複実行は許容する。
-
-# --- 再帰防止: このフックによる差し戻し後の再停止では素通しする(ゴールループ中を除く) ---
-if [ "$goal_active" = "0" ] &&
-  [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
+# --- 再帰防止: このフックによる差し戻し後の再停止では素通しする ---
+if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
   exit 0
 fi
 

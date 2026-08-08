@@ -24,11 +24,10 @@ mechanical refactors produce no entry. Trivially reversible choices don't either
 `docs/adr/`. Nothing else consumes it, so an unwritten decision is simply lost —
 by the time the ADR is written, memory has already faded.
 
-**Commit the file.** It is shared material like `.claude/learnings.md`, not local
-scratch like `.claude/goal.md` — a decision log that lives on one machine cannot
-back a team's ADRs. Leaving it untracked and un-ignored is the one wrong answer:
-it pollutes `stop-gate.sh`'s "nothing changed" check. Nothing executes from this
-file, so tracking it carries none of the risk that keeps `goal.md` ignored.
+**Commit the file.** It is shared material like `.claude/learnings.md` — a decision
+log that lives on one machine cannot back a team's ADRs. Leaving it untracked and
+un-ignored is the one wrong answer: it pollutes `stop-gate.sh`'s "nothing changed"
+check.
 
 Append only; never rewrite past entries. When `/crystal:adr` promotes one into an
 ADR it appends a `→ ADR-NNNN` marker to the original — that marks it as harvested,

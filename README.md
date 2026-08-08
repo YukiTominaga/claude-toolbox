@@ -2,19 +2,48 @@
 
 個人用の Claude Code アセットを 1 つの plugin **`crystal`** にまとめたリポジトリ。
 
+## この plugin が担う 5 つのこと
+
+crystal のハーネス部分は、次の 5 つだけを目的にしている。ここに当たらない仕組みは置かない。
+
+| 目的 | 担うもの | 強制 |
+|---|---|---|
+| 1. 決定の理由を ADR に残す | `rules/decision-log.md` → `.claude/decisions.md` → `/crystal:adr` → `docs/adr/` + `adr-lint.sh` | 構造は機械検証 |
+| 2. 実装と対になる spec が作られる | `/crystal:spec` → `docs/spec/` + `crystal:spec-critic` | `change-gate.sh` |
+| 3. 実装とは別の文脈で検証する | `crystal:verifier` + `subagent-gate.sh` | `verify-gate.sh` |
+| 4. 実装と対になるテストが必ず書かれる | `rules/testing.md` + `stop-gate.sh` | `change-gate.sh` |
+| 5. 学びが次のセッションに残る | `rules/learning.md` + `/crystal:learn` → `.claude/learnings.md` → `session-learnings.sh` | — |
+
 ## 含まれるもの
 
 | ディレクトリ | 内容 |
 |---|---|
-| `skills/` | 自作スキル 11 個 |
-| `agents/` | `spec-critic`, `verifier` |
-| `commands/` | `/learn`, `/spec`, `/goal`, `/eval`, `/adr` |
-| `hooks/` | `hooks.json` + スクリプト 10 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / subagent-gate / session-rules / session-learnings / audit-config) |
-| `scripts/` | 手動実行系スクリプト(`eval-run.sh`, `adr-lint.sh`) |
-| `rules/` | テスト方針など(SessionStart hook `session-rules.sh` が全セッションに自動注入)。**hook で強制できることは書かない**方針 — [rules/ の方針](#rules-の方針) を参照 |
-| `templates/` | spec / goal / eval-case / adr テンプレート |
+| `skills/` | 自作スキル 11 個(ドメイン知識。ハーネスとは独立) |
+| `agents/` | `spec-critic`(目的 2), `verifier`(目的 3) |
+| `commands/` | `/spec`(2), `/learn`(5), `/adr`(1) |
+| `hooks/` | `hooks.json` + スクリプト 8 本 + 共有ライブラリ `lib/classify.sh` |
+| `scripts/` | `adr-lint.sh`(目的 1 の構造検証) |
+| `rules/` | `testing.md`(4) / `learning.md`(5) / `decision-log.md`(1)。SessionStart hook が全セッションに注入 |
+| `templates/` | `spec.md`(2), `adr.md`(1) |
 
-> 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、`~/.claude/skills` 側でシンボリックリンクとして別管理する。
+hook の内訳:
+
+| hook | イベント | 目的 |
+|---|---|---|
+| `session-rules.sh` | SessionStart | `rules/*.md` を注入 |
+| `session-learnings.sh` | SessionStart | `.claude/learnings.md` を注入(目的 5 の回収) |
+| `change-gate.sh` | Stop | 実装に対するテスト / spec の欠落を差し戻す(目的 2・4) |
+| `verify-gate.sh` | Stop | 独立検証を通していない実装を差し戻す(目的 3) |
+| `stop-gate.sh` | Stop | 変更があればテスト・型チェック・lint を実行して差し戻す |
+| `subagent-gate.sh` | SubagentStop | 検証済みという完了報告の裏取り(目的 3 の補助) |
+| `format-on-save.sh` / `lint-changed.sh` | PostToolUse | 編集したファイルの整形と lint |
+
+分類の正規表現(何が実装で何がテストか)は `hooks/lib/classify.sh` に 1 つだけ置き、
+`change-gate.sh` と `verify-gate.sh` が source する。2 つに書き写すと必ず片方だけ
+直された状態が生まれる。
+
+> 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、
+> `~/.claude/skills` 側でシンボリックリンクとして別管理する。
 
 ## インストール
 
@@ -25,139 +54,129 @@ claude plugin install crystal@yuki --scope user
 
 新しいセッションで有効化される。以降:
 
-- コマンド: `crystal:spec` / `crystal:learn` / `crystal:goal` / `crystal:eval` / `crystal:adr`
+- コマンド: `crystal:spec` / `crystal:learn` / `crystal:adr`
 - サブエージェント: `crystal:spec-critic` / `crystal:verifier`
 - スキル 11 個は `crystal` 由来でロード
-- hooks(SessionStart/PreToolUse/PostToolUse/SubagentStop/Stop)が自動登録され、
+- hooks(SessionStart/PostToolUse/SubagentStop/Stop)が自動登録され、
   `rules/*.md` はセッション開始時に自動でコンテキストへ注入される
-
-## Loop Engineering (goal ループ)
-
-出典: [Loop Engineering](https://zenn.dev/ino_h/articles/2026-06-16-loop-engineering-goal)
-
-「毎ターン人間がプロンプトを打つ」のをやめ、完了条件を 1 度だけ書いてエージェントを
-自走させる考え方。記事が挙げる 5 要素と、このリポジトリでの対応は次のとおり。
-
-| 記事の要素 | crystal での対応 |
-|---|---|
-| Automations(定期実行による発見と分類) | 組み込みの `/schedule` に委ねる。回し方は [トリガー](#トリガー) を参照 |
-| Worktrees(並行エージェントの隔離) | **組み込みの `EnterWorktree` に委ねる**。本 plugin では実装しない |
-| Skills(プロジェクト固有の作業知識) | `skills/` 11 個 + `rules/`(SessionStart hook が全セッションに注入) |
-| Plugins / Connectors(外部ツール接続) | 本リポジトリ自体が plugin。MCP 接続は各プロジェクト側の設定に任せる |
-| Sub-agents(実装者と検証者の分離) | 常時は `subagent-gate.sh` / `stop-gate.sh`(hook)。`crystal:verifier` / `crystal:spec-critic` は**明示呼び出し時のみ** |
-| 外部メモリ(実行間で状態を失わない) | `.claude/goal.md` の `## 判定履歴` / `docs/spec/` / `.claude/learnings.md`(SessionStart hook が自動注入) / `.claude/decisions.md` → `docs/adr/` / `evals/` |
-
-ループ本体は Stop hook `goal-gate.sh`。`/crystal:goal` で完了条件を `.claude/goal.md` に
-定義すると(`docs/spec/` に approved な仕様があれば受け入れ条件を自動インポート)、
-応答完了のたびに Haiku で達成判定し、未達なら exit 2 で差し戻す。
-
-- **オプトイン**: `.claude/goal.md` が `status: active` のときだけ動く。それ以外はコストゼロ
-- **毎ターン判定**: stop-gate と異なり `stop_hook_active` で素通ししない(意図的な設計差)。
-  無限ループ防止は round カウンタ + `max_rounds`(テンプレート既定 5、超過で `status: stalled`)が担う。
-  `/crystal:goal` は作業規模に応じて値を提案する
-- **判定は 2 段階**: まず goal-gate が完了条件に併記された検証コマンドを**実際に実行する**。
-  1 つでも失敗したら Haiku を呼ばずにその場で差し戻す(そのラウンドの judge コストを払わない)。
-  全て通れば、実測結果を添えて Haiku が最終判定する。
-  記事の「機械が真偽を判定できる終了状態」をテキスト判定に落とさないための仕組み
-- **実行できるコマンドは「全体一致」で限定される**: この実行は Claude Code の Bash ツールを
-  通らないため、権限プロンプトも PreToolUse(`pre-bash-guard.sh`)もかからない。
-  したがって許可はコマンド**全体**が既定パターンのどれかに完全一致する場合だけとする:
-  `npm|pnpm|yarn|bun test` / `… run <script>` / `npx vitest run` / `pytest [-qxvs]` /
-  `tsc --noEmit` / `ruff check|mypy|eslint|shellcheck <path>` / `go test|vet ./...` /
-  `cargo test|check|clippy` / `make test|check|lint` / `mvn|gradle test|verify|check` /
-  `git status --porcelain|diff --exit-code|diff --quiet` など
-  (全体は `hooks/goal-gate.sh` の `VERIFY_RE` が正)。
-  **コマンド名の先頭トークンだけで許可してはいけない**: `node` / `python` / `git` / `make` /
-  `go` / `cargo` / `npx` は引数だけで任意コードを実行できる汎用ランナーであり、
-  `node -e '…'`、`git -c alias.x='!…' x`、`make -f evil.mk`、`npx -y <pkg>` が
-  区切り文字もメタ文字も使わずに素通りする(実際にこの穴を作り込み、レビューで検出した)。
-  一致しなかったコマンドは差し戻さず、従来どおり judge の読解に委ねる
-- **goal.md が git 管理下なら実行しない**: リポジトリを clone しただけで
-  `.claude/goal.md` のコマンドが走るのを防ぐための境界。
-  `.claude/goal.md` は `.gitignore` に入れる前提の運用なので、通常は影響しない
-- **stop-gate はゴール中も毎ターン走る**: 同じ `npm test` が 2 度走ることはあるが、
-  条件付きで無効化してはいけない。goal-gate が実際に実行するのは
-  「## 完了条件」内かつ許可パターンに一致したコマンドだけで、その判定を stop-gate 側で
-  正確に再現できない。両者の条件がずれると「stop-gate は goal-gate に任せたつもり、
-  goal-gate は judge に任せたつもり」で実検証が 1 つも走らないゴールが生まれる
-- **judge は会話の出力しか読めない**: コマンドを実行することもファイルを読むこともできない。
-  そのため完了条件は `<終了状態> — 検証: <コマンド> が <期待結果>` の形で書き、
-  実測結果にも作業ログにも現れていない条件は未達として扱われる。
-  アプリコードを変更したのにテストの追加・更新と実行結果が無い場合も未達になる
-  (ドキュメント/設定のみの変更と、既存テストで担保されるリファクタは除く)
-- **fail-open**: claude CLI 不在・認証失敗・出力パース失敗時は判定をスキップして通す
-- 判定結果は `~/.claude/logs/goal-gate.jsonl` と `.claude/goal.md` の `## 判定履歴`(直近 5 件)に残る。
-  後者は次ターン以降も読まれる外部メモリとして機能する
-- `.claude/goal.md` は `.gitignore` に追加すること(untracked のままだと stop-gate の
-  「変更なし判定」を汚染する)。`/crystal:goal` が追加を提案する
-
-## plan / spec / goal / loop の使い分け
-
-| | 起動トリガー | 停止条件 | 判定者 | 状態の置き場 |
-|---|---|---|---|---|
-| plan mode(組み込み) | 人が plan mode に入る | 人がプランを承認する | 人 | セッション内(揮発する) |
-| `/crystal:spec` | 人が叩く | 人が `ステータス: approved` にする | 人(+ `crystal:spec-critic`) | `docs/spec/*.md` |
-| `/crystal:goal` | 人が 1 回叩く → 以降はターン終了ごとに自動 | 完了条件をすべて満たす / `max_rounds` 超過 | 検証コマンドの exit code → Haiku(goal-gate) | `.claude/goal.md` |
-| `/loop`(組み込み) | 時間間隔 | 人が止める | 判定しない | 残らない |
-
-判断基準:
-
-- **終わりが定義できる** → `goal`
-- **定期的に見張るだけで終わりが無い** → `loop`
-- **完了条件を機械判定できない** → まだ `plan` か `spec` の段階。goal にしてはいけない
-- **来週も使う条件** → `spec` に書いて goal にインポートする(その場限りなら goal に直接書く)
-
-いずれも「これから何を作るか」を扱う。**既に決めたことの理由**は別軸で、
-`.claude/decisions.md` → `/crystal:adr` → `docs/adr/` が担当する([ADR](#adr-意思決定の記録))。
 
 ## 標準の開発フロー
 
 ```
 /crystal:spec <機能>   要件を詰める → 承認したら ステータス: approved に昇格
-/crystal:goal          AC → DC、spec の制約 → goal の制約 に変換し、そのまま実装開始
-  ↓ 以降は自走 (goal-gate が毎ターン判定 → 未達なら差し戻し)
-status: done           達成
-/crystal:learn         知見を learnings.md / evals/ に落とす (ここだけ人が叩く)
+  ↓ 実装 (実装 + テスト + spec の 3 点が揃うまで change-gate が差し戻す)
+  ↓ stop-gate が毎ターン テスト / 型チェック / lint を実行
+crystal:verifier       別文脈での独立検証 (verify-gate が呼ぶまで応答を終えさせない)
+/crystal:learn         知見を .claude/learnings.md に落とす
 /crystal:adr <テーマ>  「なぜこの構成にしたか」を docs/adr/ に残す (決定をした回だけ)
 ```
 
-作業中に決定をしたら、その場で `.claude/decisions.md` に書き残る(`rules/decision-log.md`)。
-`/crystal:adr` はそれを一次情報として読む。詳細は [ADR](#adr-意思決定の記録) を参照。
+作業中に決定をしたら、その場で `.claude/decisions.md` に書き残す(`rules/decision-log.md`)。
+`/crystal:adr` はそれを一次情報として読む。
 
-## ガードレール
+## 変更の対を機械検証する (`change-gate.sh`)
 
-記事が「常態として向き合うべき本番問題」として挙げる 3 つへの対策:
+目的 2 と目的 4 は、どちらも「差分の形」で機械判定できる。散文で頼まずここに置いてある。
 
-| リスク | 対策 |
+Stop のたびに変更ファイル(作業ツリー + index + 未追跡)を分類し、次のどちらかに当たれば
+exit 2 で差し戻す:
+
+- 実装ファイルが変わったのに、**テストファイルが 1 つも変わっていない**
+- 実装ファイルが変わったのに、**`docs/spec/` が 1 つも変わっていない**
+
+分類の規則:
+
+| 種別 | 判定 |
 |---|---|
-| 無限ループ | `max_rounds`(テンプレート既定 5)。判定前に round を進めて永続化し、超過したら `status: stalled` にして自動判定を止める。ランタイム側も同一ターンの連続ブロックを既定 8 回で打ち切る(`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`)ため、`max_rounds` は 8 以下にする |
-| ゴールドリフト | `.claude/goal.md` の `## 制約`。judge が `violations` を返したら、完了条件を満たしていても `met` を false に強制して差し戻す |
-| コスト爆発 | judge は Haiku 固定。検証コマンドが失敗したラウンドは judge を呼ばない(未達が機械的に確定しているため)。`--output-format json` の `total_cost_usd` を frontmatter の `cost_usd` に累積し、`/crystal:goal status` で確認できる |
+| 実装 | `.ts .tsx .js .jsx .mjs .cjs .py .go .rs .rb .java .kt .swift .c .cpp .h .cs .scala .php .ex .dart .vue .svelte .sh` など。ただしテスト・設定を除く |
+| テスト | `tests?/` `__tests__/` `specs?/` `e2e/` 配下、`*.test.*` `*.spec.*` `test_*.*` `*_test.*` `*Test.java` `conftest.py` |
+| 設定(対象外) | `*.config.*`、`.*rc` / `.*rc.*` |
+| spec | `docs/spec/` `docs/specs/` 配下の `.md` |
 
-## トリガー
+判定できないこと、および設計上の割り切り:
 
-記事はループの最小要件を「**トリガー**(起動条件)と**検証可能なゴール**(終了状態)」としている。
-goal-gate が担うのは後者だけで、前者は起動方法の選択になる。
+- **テストの中身が妥当かは見ない。** 空のテストを 1 つ置けば通る。中身は
+  `stop-gate.sh`(実行して落ちるか)と `rules/testing.md`(何をテストするか)が担う
+- **仕様と実装が一致しているかは見ない。** ファイルが変わったかだけを見る
+- **免除は機械判定できない。** 既存テストで担保されるリファクタ、仕様が変わらない
+  バグ修正、使い捨てスクリプト — どれも差分の形からは区別がつかない。そのため
+  **1 度だけ差し戻し、`stop_hook_active` の再停止では素通しする**。免除に当たるなら
+  その旨を報告に書いてから応答を終えれば通る。「黙って書き忘れる」は止まり、
+  「理由を述べて省く」は通る、という線引き
+- **プロジェクト単位で切れる。** `CRYSTAL_TEST_GATE=off` / `CRYSTAL_SPEC_GATE=off`。
+  切れないゲートは、合わない現場では plugin ごと外されて全部が失われる
 
-| トリガー | 起動方法 | 用途 | 注意 |
-|---|---|---|---|
-| 手動(既定) | `/crystal:goal` を叩く | 対話しながら回す | — |
-| 非対話 1 ショット | `claude -p "ゴールを達成するまで作業を続けて"` | CI・手元バッチ | 人が止められない。`max_rounds` を先に見直す |
-| 定期 | 組み込みの `/schedule` から上の `claude -p` を起動する | 記事の Automations 相当(発見と分類を自動で回す) | セッションごとにゴールを作り直す設計にする |
+`docs/spec/` は `TEST_RE` の `specs?/` にも一致するため、テスト判定の前に spec を除いている。
+除かないと「仕様を書いた = テストも書いた」ことになり、目的 4 のゲートが黙って死ぬ
+(回帰テストあり)。
 
-どのトリガーでも Stop hook は発火するため、専用のループスクリプトは要らない。
-`.claude/goal.md` が `status: active` なら goal-gate がそのまま効き、未達なら差し戻され、
-達成(`status: done`)または `max_rounds` 超過(`status: stalled`)で終了する。
+## 独立検証を強制する (`verify-gate.sh`)
 
-非対話で回す前に確認すること:
+目的 3 は「実装した文脈のまま自己申告で終える」ことを止めるためにある。
+呼び出しの有無は機械判定できるので、散文ではなくここに置いてある。
 
-- **すべての DC の検証コマンドが実行可能な形か**。許可リスト外・リダイレクト付きだと
-  機械判定が効かず、人が見ていない場所で Haiku の読解だけが判定根拠になる
-- **`max_rounds` は対話時より小さくする**。差し戻し 1 回ごとにフルターンを消費する
+Stop のたびにメインセッションの transcript を読み、時系列に並ぶ 2 種類の印だけを取る:
 
-> **`/loop` と goal を同時に使わないこと。** 時間トリガー(loop)とターン終了トリガー(goal-gate)が
-> 同一セッションで二重ループになり、loop の 1 周ごとに goal-gate が差し戻しを重ねる。
-> `/schedule` は別セッションを起こすため二重にならない。定期実行はこちらを使う。
+| 印 | 何から取るか |
+|---|---|
+| `EDIT` | `Write` / `Edit` / `MultiEdit` / `NotebookEdit` の `tool_use`(コードファイルのみ) |
+| `VERIFY` | `Agent`(ビルドにより `Task`)の `tool_use` で `subagent_type` が `verifier` を含むもの |
+
+**最後に現れた印が `VERIFY` でなければ差し戻す。** 「最後の変更より後に検証したか」を
+これだけで判定できる。
+
+- **`stop_hook_active` では素通ししない**(change-gate との意図的な設計差)。
+  免除の余地がほとんど無く、verifier を呼べばその時点で印が `VERIFY` になって
+  自然に通るため、ループにはならない
+- **`Agent` と `Task` の両方を受ける。** サブエージェント起動ツールの名前は
+  Claude Code のビルドによって変わる。片方だけを見ているとある日静かに無効化される
+- **`docs/spec/` に仕様が 1 つも無ければ発火しない。** verifier は仕様の受け入れ条件を
+  根拠に判定するため、仕様が無い状態で呼んでも「検証不能」しか返らず、
+  差し戻しても状況が変わらない = 抜けられないループになる
+- **検証後の `docs/spec/` 更新・設定ファイル更新は再検証を要求しない。**
+  仕様のステータスを `approved` → `done` に変えただけで差し戻されると、
+  「検証 → 仕様更新 → 差し戻し」で抜けられなくなる
+- **`file_path` はプロジェクトルートを剥がしてから分類する。** 剥がさないと
+  `/home/me/specs/proj/src/a.ts` のような親ディレクトリ名に引きずられる
+- **Bash 経由の書き換え(`sed -i` 等)は取りこぼす。** リダイレクトを変更とみなすと
+  ログ出力のたびに再検証を要求することになり、誤検出の害の方が大きい
+- `CRYSTAL_VERIFY_GATE=off` で無効化できる
+
+### 合格したかまで見る
+
+「検証を回したか」だけでは、verifier が「満たさない」と言っているのを無視して
+完了できてしまう。そこで verifier は本文の末尾に**判定行を 1 行**返す契約になっている:
+
+```
+CRYSTAL-VERDICT: PASS
+CRYSTAL-VERDICT: FAIL AC-2, AC-5
+```
+
+ゲートは対応する `tool_result`(= verifier の戻り値)からこの 1 行だけを読む。
+散文の要約は読解しない。`満たさない: 0件` のような紛らわしい文が本文にあっても、
+判定行が `PASS` なら通す(判定基準を曖昧にしないため)。
+
+- **「未検証」は PASS に含めない。** 実行結果で裏が取れていない条件は、
+  満たしているかが分かっていないという意味であって合格ではない
+- **`FAIL` は `stop_hook_active` でも折れない。** 直せば `PASS` になるので抜けられる。
+  仕様の側が実態と合っていないなら `docs/spec/` を直すのが正しい解決になることもある
+- **判定行が読み取れないときだけは 1 度で諦める。** 古い crystal がインストールされて
+  いると判定行が返らない。ここで詰まらせると `plugin update` すら打てなくなるので、
+  再停止では素通しする(「最後の変更より後に検証を回した」担保は既に取れている)
+
+出力形式に依存する以上、契約が片側だけ書き換えられると判定が黙って無力化される。
+これを防ぐため、`tests/verify-gate.test.ts` が `hooks/verify-gate.sh` と
+`agents/verifier.md` の両方を読み、番兵の文字列と正規表現が一致していることを検査する。
+書式を変えるなら、テストが落ちる。
+
+サブエージェントは**別セッションではない**。同一セッション・同一ワークツリーで動く。
+得られるのは「会話の経緯を引き継がない独立コンテキストが、仕様と実行結果だけで判定する」
+という性質までで、実装が汚したツリーを見る点は残る。`claude -p` で本当に別プロセスを
+起こす案は、コストと認証環境依存、判定結果を会話へ戻す経路が stderr しか無いことから
+採らなかった。
+
+`stop-gate.sh` と verifier でテストが二重に走る。verifier が動くのは「実装を変更した
+まとまりごとに 1 回」なので許容している。
 
 ## 並行エージェント実行時の検証
 
@@ -167,8 +186,8 @@ goal-gate が担うのは後者だけで、前者は起動方法の選択にな�
 |---|---|---|
 | ファイル単位の lint / 整形 | `PostToolUse`(`lint-changed.sh` / `format-on-save.sh`) | サブエージェント内でも発火するため、変更した本人がその場で直せる |
 | 完了報告の裏取り | `SubagentStop`(`subagent-gate.sh`) | 変更したうえで「テストが通った」と主張しているのに実行痕跡が無いものだけを止める。安く済む |
-| プロジェクト全体の typecheck / test | 親の `Stop`(`stop-gate.sh`)に一本化 | 並列エージェントは既定で worktree 隔離されず同一チェックアウトを共有する。同時にフルテストを走らせるとキャッシュ破壊と CPU 飽和を招く |
-| 仕様(AC)単位の独立判定 | `crystal:verifier`(**明示呼び出し時のみ**) | 会話の文脈を持たない第三者判定。日常の完了報告で自動起動すると stop-gate / goal-gate と合わせてテストが三重に走る |
+| プロジェクト全体の typecheck / test | 親の `Stop`(`stop-gate.sh`) | 並列エージェントは既定で worktree 隔離されず同一チェックアウトを共有する。同時にフルテストを走らせるとキャッシュ破壊と CPU 飽和を招く |
+| 仕様(AC)単位の独立判定 | `crystal:verifier`(`verify-gate.sh` が強制) | 会話の文脈を持たない第三者判定。実装を変更したまとまりごとに 1 回だけ走る |
 
 `subagent-gate.sh` の挙動:
 
@@ -184,17 +203,6 @@ goal-gate が担うのは後者だけで、前者は起動方法の選択にな�
 - `stop_hook_active: true`(差し戻し後の再停止)は素通しする
 - fail-open。ログは `~/.claude/logs/subagent-gate.jsonl`
 
-## Eval Engineering
-
-プロジェクトの `evals/cases/*.md`(1ケース1ファイル、git で版管理)に検証ケースを蓄積し、
-プラグイン同梱の `scripts/eval-run.sh` で実行する。形式は `templates/eval-case.md` を参照。
-
-- **command 型**: コマンド実行 + exit code / 出力正規表現で機械検証(優先)
-- **rubric 型**: Haiku がルーブリックに照らして判定(主観評価のみ。CLI 不在時は SKIP)
-- 操作は `/crystal:eval`(add / run / list)。FAIL が 1 件でもあれば exit 1
-- `/crystal:learn` は 2 回以上再発した問題の eval ケース化を提案する
-- `crystal:verifier` は `evals/` があればランナーを実行し判定材料に含める
-
 ## ADR (意思決定の記録)
 
 出典: [ADR 作成を Claude の Agent Skills で自動化する](https://blog.cybozu.io/entry/2026/07/28/090000)
@@ -207,16 +215,15 @@ goal-gate が担うのは後者だけで、前者は起動方法の選択にな�
 | 記事の課題 | crystal での対応 |
 |---|---|
 | ADR 作成が後回しになり、書く頃には記憶が薄れている | `rules/decision-log.md` が**決定した瞬間に** `.claude/decisions.md` へ書かせる。ADR はそれを読んで後から起こす |
-| 材料が作業ログ・仕様書・実装コードに散らばっている | `/crystal:adr` の「1. 情報収集」が `decisions.md` / `docs/spec/` / `learnings.md` / `goal.md` の判定履歴 / `git log` / 実装を横断して集める |
+| 材料が作業ログ・仕様書・実装コードに散らばっている | `/crystal:adr` の「1. 情報収集」が `decisions.md` / `docs/spec/` / `learnings.md` / `git log` / 実装を横断して集める |
 | いきなり全文を書くと方向がずれて手戻りが大きい | 「3. 内容確認」を**必須の合意チェックポイント**にし、項目ごとの骨子で合意してから清書する |
 | 過去 ADR と文体が揃わない | 「4. 清書」で既存 `docs/adr/*.md` を読み、文体・粒度を合わせる |
 
-記事が「鍵になる」としているのは skill ではなく**一次情報(作業ログ)が残っている文化**の方で、
-crystal に欠けていたのもそこだった。`.claude/learnings.md`(ハマりポイント)、`docs/spec/`
-(これから作るものの要件)、`goal.md` の判定履歴(未達の記録)はあったが、
-**採らなかった案とその理由**を残す場所がどこにも無く、決定の「なぜ」は毎回セッションと
-一緒に消えていた。`.claude/decisions.md` はその穴を埋める層で、
-散文で構わない代わりに**却下案と却下理由を必ず含める**ことだけを要求する。
+記事が「鍵になる」としているのは skill ではなく**一次情報(作業ログ)が残っている文化**の方。
+`.claude/learnings.md`(ハマりポイント)と `docs/spec/`(これから作るものの要件)はあっても、
+**採らなかった案とその理由**を残す場所が無ければ、決定の「なぜ」は毎回セッションと
+一緒に消える。`.claude/decisions.md` はその穴を埋める層で、散文で構わない代わりに
+**却下案と却下理由を必ず含める**ことだけを要求する。
 
 設計上の判断:
 
@@ -231,18 +238,12 @@ crystal に欠けていたのもそこだった。`.claude/learnings.md`(ハマ�
   `superseded by ADR-NNNN` に書き換え、本文は残す。上書きすると
   「なぜ変えたか」が消え、ADR の存在価値そのものが失われる
 - **`decisions.md` は commit する**。`learnings.md` と同じチーム資産で、1 台の手元にしか
-  無い決定ログはチームの ADR を支えられない。`goal.md` を `.gitignore` に入れるのは
-  goal-gate がそこに書かれたコマンドを**実行する**ためで、何も実行しない
-  `decisions.md` には当てはまらない。untracked のまま放置するのだけが誤りで、
+  無い決定ログはチームの ADR を支えられない。untracked のまま放置するのだけが誤りで、
   stop-gate の「変更なし判定」を汚す
-- **`decisions.md` は追記のみ・全文ロードしない**。`learnings.md` と同じく際限なく増えるが、
-  読み手が `/crystal:adr` だけなので注入側ではなく**読む側**で絞る。テーマで見出しを
-  絞り込み、ADR 化済み(`→ ADR-NNNN` マーカー付き)は飛ばし、32KB を超えたら
+- **`decisions.md` は追記のみ・全文ロードしない**。読み手が `/crystal:adr` だけなので
+  注入側ではなく**読む側**で絞る。テーマで見出しを絞り込み、ADR 化済み
+  (`→ ADR-NNNN` マーカー付き)は飛ばし、32KB を超えたら
   `.claude/decisions/YYYY.md` へ年分割する
-- **`goal-gate.jsonl` は `cwd` で絞ってから読む**。このログは `$HOME` 配下に
-  プロジェクト横断で積まれる。ADR は恒久文書なので、他プロジェクトの差し戻し理由が
-  却下理由として紛れ込むと後から出所を辿れない。`cwd` は goal-gate が全レコードに
-  記録する(回帰テストあり)。`/crystal:learn` の再発回数カウントも同じ理由で絞る
 - **裏が取れない項目は空けて出す**。記事も「記憶が薄れる問題は完全には解消されない」と
   している。特に却下理由は記録に残りにくく最も捏造しやすいため、
   `/crystal:adr` には材料が無い項目を「材料なし」と明示させ、
@@ -266,20 +267,6 @@ ADR の品質のうち機械判定できる部分は散文に委ねず、`adr-li
 **判定できないのは「却下理由が事実か」だけ**で、そこ以外は構造として締められる。
 「ADR は本質的に機械検証できない」は正しくない。
 
-プロジェクト側で常時回すなら、eval ケースにするのが早い(`/crystal:eval add`):
-
-```yaml
-id: adr-structure
-type: command
-description: docs/adr の構造が壊れていない
-run: bash "$CLAUDE_PLUGIN_ROOT/scripts/adr-lint.sh"
-expect_exit: 0
-```
-
-`eval-run.sh` は `CLAUDE_PLUGIN_ROOT` が未設定なら自分の位置から解決して export する。
-ケースはプロジェクトの git 管理下に置かれるため、環境ごとに違うプラグインの
-インストール先を埋め込まずに済ませる必要がある。
-
 ## 更新
 
 リポジトリを編集したら、次の手順で反映する。注意点が 2 つある:
@@ -293,7 +280,7 @@ expect_exit: 0
 #    plugin update はバージョン番号で新旧を判定する)
 # 2. commit して push する(marketplace のソースが GitHub のため必須)
 git push
-# 3. marketplace のメタデータを更新
+# 3. マーケットプレイスのメタデータを更新
 claude plugin marketplace update yuki
 # 4. インストール済みプラグイン本体を更新
 claude plugin update crystal@yuki
@@ -307,11 +294,11 @@ npm install
 npm test
 ```
 
-vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` /
-`adr-lint.sh` / `eval-run.sh` の振る舞いをテストしている。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
-壊れても手動 E2E では気づけない。`adr-lint.sh` は逆に**誤検出しないこと**が要件で、
-妥当な ADR を落とすようになると lint ごと無視されるため、正常系も明示的に押さえている。`tests/helpers/sandbox.ts` が使い捨ての git リポジトリを作り、
-`claude`(judge)と `npm`(DC の検証コマンド)を fake に差し替えて実行する。
+vitest で `change-gate.sh` / `verify-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` /
+`adr-lint.sh` の振る舞いをテストしている。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
+壊れても手動 E2E では気づけない。`change-gate.sh` と `adr-lint.sh` は逆に**誤検出しないこと**が
+要件で、ドキュメント修正のたびにテストを要求するようになるとゲートごと無視されるため、
+正常系も明示的に押さえている。`tests/helpers/sandbox.ts` が使い捨ての git リポジトリを作る。
 
 ## 構成
 
@@ -321,17 +308,7 @@ vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learn
 
 ## 前提
 
-- hooks は `node` / `jq` が PATH にあることを前提とする。
-- goal-gate と eval の rubric 判定は `claude` CLI が PATH にあり認証済みであることを
-  前提とする。満たさない場合は判定をスキップする(fail-open)。
-- goal-gate は完了条件の検証コマンドを実行するため、`hooks.json` での timeout を
-  600 秒にしてある(テスト実行時間がそのまま判定時間に乗るため)。
-  検証は全体で 240 秒・1 本あたり 120 秒の予算で打ち切り、残りは「未実行」として judge に渡す。
-  予算を持たせないと、round を消費したまま hook がランタイムに打ち切られ、
-  判定が 1 度も記録されないまま `max_rounds` に達して `stalled` に落ちる。
-- `timeout`(coreutils)が無い環境(macOS の既定)でも動くよう、goal-gate と `eval-run.sh` は
-  `perl -e 'alarm shift; exec @ARGV'` によるタイムアウトで代替する。従来は `timeout` に
-  依存していたため、macOS では judge が exit 127 で必ず失敗し、判定に到達できなかった。
+- hooks は `node` / `jq` / `git` が PATH にあることを前提とする。
 - `rules/` は SessionStart hook(`session-rules.sh`)が注入するため、プラグインを
   有効化するだけで適用される。外部の CLAUDE.md からの参照は不要。
 - プロジェクトの `.claude/learnings.md` も SessionStart hook(`session-learnings.sh`)が
@@ -339,9 +316,7 @@ vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learn
   読み込む導線が無いと次のセッションで参照されない(書くだけで回収されない)ため。
   際限なく増えるので末尾 8000 バイトまでを載せ、エントリの途中で切らないよう
   見出し行から始める。切り詰めた場合はその旨を明記する。
-- `audit-config.sh` は手動実行用スクリプトで、`hooks.json` には登録していない。
 - `.claude/decisions.md` は SessionStart で注入しない(読み手が `/crystal:adr` に限られるため)。
-  `learnings.md` との違いは [ADR](#adr-意思決定の記録) を参照。
 
 ## rules/ の方針
 
@@ -353,16 +328,14 @@ skills / agents / hooks / MCP / LSP / monitors)。そのため `session-rules.sh
 
 採用基準は 2 つ:
 
-1. **hook で強制できることは rules に書かない。** `stop-gate.sh` が実際にテスト・
-   型チェック・lint を実行して exit 2 で差し戻す以上、「完了と報告する前に検証しろ」
-   と散文で書いても遵守率は上がらず、コンテキストを消費するだけ。
+1. **hook で強制できることは rules に書かない。** `stop-gate.sh` がテスト・型チェック・
+   lint を実行し、`change-gate.sh` が差分の形を検査して exit 2 で差し戻す以上、
+   同じことを散文で書いても遵守率は上がらず、コンテキストを消費するだけ。
    [Opus 5 のプロンプティングガイド](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5)
    も、旧世代向けの検証指示("include a final verification step" 等)は
    過剰検証を招くレガシー足場として削除を推奨している。
+   残すのは**機械が判定できない部分**だけ(何をテストするか、何が免除に当たるか)。
 2. **既定の挙動と一致することは書かない。** 「シンプルに書く」「secret を
-   ハードコードしない」「push は言われた時だけ」といった一般論は、書いても
-   振る舞いが変わらない。残すのは既定と**異なる**規約
-   (Conventional Commits の型指定、`main` に直接コミットしない、
-   2 つ目のテストフレームワークを入れない、等)に限る。
+   ハードコードしない」といった一般論は、書いても振る舞いが変わらない。
 
 判定は「この行を消したら Claude が間違えるか?」で行い、答えが No なら消す。
