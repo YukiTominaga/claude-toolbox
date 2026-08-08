@@ -1,6 +1,6 @@
 ---
 name: nextjs-dify-workflow-api
-description: Next.js App Router から Dify Workflow API (`POST /v1/workflows/run`) を **生 fetch** で呼び出し、ファイルアップロード → ワークフロー起動 → SSE (`response_mode: "streaming"`) のイベントを Route Handler 内でパースし、NDJSON でクライアントへ再ストリームする実装パターン。`dify-client` SDK を使わない・チャットフローではない・HITL Service API でもない、"純粋な Workflow を API として呼び出す" ケース全般を対象とする。`/v1/files/upload` での local_file アップロード、`workflow_started` / `node_started` / `node_finished` / `workflow_finished` イベントの処理、`outputs.structured_output.X` と `outputs.X` の両対応、Zod による安全な再エミット、`logger.withSpan` での OpenTelemetry 計装、`USE_DIFY=0` でのサンプルフォールバック、`difyUser()` による user 識別子の名前空間化を扱う。「Dify Workflow API」「workflows/run」「ワークフローを API として呼ぶ」「Dify ファイルアップロード」「SSE → NDJSON」「Dify 生 fetch」などのキーワードで使用すること。Chatflow を呼ぶなら `nextjs-dify-chat`、Human Input Node の承認フローを実装するなら `dify-hitl-workflow-api` を使う。
+description: Next.js App Router から Dify Workflow API (`POST /v1/workflows/run`) を **生 fetch** で呼び出し、ファイルアップロード → ワークフロー起動 → SSE (`response_mode: "streaming"`) のイベントを Route Handler 内でパースし、NDJSON でクライアントへ再ストリームする実装パターン。`dify-client` SDK を使わない・チャットフローではない・HITL Service API でもない、"純粋な Workflow を API として呼び出す" ケース全般を対象とする。`/v1/files/upload` での local_file アップロード、`workflow_started` / `node_started` / `node_finished` / `workflow_finished` イベントの処理、`outputs.structured_output.X` と `outputs.X` の両対応、Zod による安全な再エミット、OpenTelemetry 計装（ストリーム寿命に合わせた span 管理）、`USE_DIFY=0` でのサンプルフォールバック、`difyUser()` による user 識別子の名前空間化を扱う。「Dify Workflow API」「workflows/run」「ワークフローを API として呼ぶ」「Dify ファイルアップロード」「SSE → NDJSON」「Dify 生 fetch」などのキーワードで使用すること。Chatflow を呼ぶなら `nextjs-dify-chat`、Human Input Node の承認フローを実装するなら `dify-hitl-workflow-api` を使う。
 ---
 
 # Next.js × Dify Workflow API (生 fetch)
@@ -264,7 +264,8 @@ export type WorkflowStreamEvent = z.infer<typeof workflowStreamEventSchema>;
 `app/api/<feature>/route.ts`
 
 ```typescript
-import { logger } from '@/lib/logging'; // OTel withSpan ラッパ（任意）
+import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { logError } from '@/lib/logger'; // OTel Logs API ラッパ（gcp-observability-nextjs 参照）
 import { getDifyWorkflowConfig, difyUser } from '@/lib/dify/config';
 import { uploadFileToDify } from '@/lib/dify/files';
 import { runWorkflow } from '@/lib/dify/workflow';
@@ -276,6 +277,8 @@ import {
 
 export const runtime = 'nodejs';
 
+const tracer = trace.getTracer('dify-workflow', '1.0.0');
+
 function emit(
   controller: ReadableStreamDefaultController<Uint8Array>,
   event: WorkflowStreamEvent
@@ -286,8 +289,8 @@ function emit(
 }
 
 export async function POST(req: Request) {
-  const traceparent = req.headers.get('traceparent') ?? undefined;
-  const xCloudTraceContext = req.headers.get('x-cloud-trace-context') ?? undefined;
+  // traceparent / x-cloud-trace-context を手で取り出す必要はない。
+  // 上流のコンテキストは Propagator が復元し、span とログに自動で伝播する
 
   // --- 入力バリデーション（multipart の例）
   const form = await req.formData();
@@ -312,7 +315,16 @@ export async function POST(req: Request) {
     );
   }
 
-  return logger.withSpan('dify.workflow.run', async () => {
+  // ⚠️ ここは startActiveSpan を使えない。ReadableStream は Response を返した後も
+  // 生き続けるため、コールバック終了で span.end() されると配信中に計測が打ち切られる。
+  // startSpan + context.with で伝播し、ストリーム終了時に自分で end() する
+  const span = tracer.startSpan('dify.workflow.run', {
+    kind: SpanKind.CLIENT,
+    attributes: { 'dify.file_count': files.length },
+  });
+
+  return context.with(trace.setSpan(context.active(), span), async () => {
+   try {
     const user = difyUser(cfg, crypto.randomUUID());
     const uploaded = await Promise.all(files.map((f) => uploadFileToDify(cfg, f, user)));
 
@@ -357,7 +369,9 @@ export async function POST(req: Request) {
                 (evt as { data?: { status?: string; outputs?: unknown; error?: string } })
                   .data ?? {};
               if (data.status === 'failed') {
-                emit(controller, { type: 'error', message: data.error ?? 'workflow failed' });
+                const message = data.error ?? 'workflow failed';
+                span.setStatus({ code: SpanStatusCode.ERROR, message });
+                emit(controller, { type: 'error', message });
                 return;
               }
               // ⚠️ outputs はトップレベル / structured_output どちらに来るか揺れる
@@ -371,37 +385,52 @@ export async function POST(req: Request) {
             }
 
             if (event === 'error') {
-              emit(controller, {
-                type: 'error',
-                message: (evt as { message?: string }).message ?? 'Dify workflow error',
-              });
+              const message = (evt as { message?: string }).message ?? 'Dify workflow error';
+              span.setStatus({ code: SpanStatusCode.ERROR, message });
+              emit(controller, { type: 'error', message });
               return;
             }
           }
 
           if (!emittedResult) {
             // workflow_finished が来ずに SSE が閉じた = Studio 側のスキーマ不一致を疑う
-            emit(controller, {
-              type: 'error',
-              message: 'ストリームが途中で切断されました（Workflow の Start/End スキーマを確認）',
-            });
+            const message =
+              'ストリームが途中で切断されました（Workflow の Start/End スキーマを確認）';
+            span.setStatus({ code: SpanStatusCode.ERROR, message });
+            emit(controller, { type: 'error', message });
           }
         } catch (err) {
-          logger.logError('dify.workflow.run: stream failed', err, traceparent, xCloudTraceContext);
-          emit(controller, {
-            type: 'error',
-            message: err instanceof Error ? err.message : '不明なエラー',
-          });
+          const error = err instanceof Error ? err : new Error(String(err));
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          // traceparent の引き回しは不要。上の context.with 内なので相関は自動
+          logError('dify.workflow.run: stream failed', error);
+          emit(controller, { type: 'error', message: error.message });
         } finally {
+          span.end(); // ストリームを閉じるタイミングで span も閉じる
           controller.close();
         }
       },
     });
 
     return new Response(stream, { headers: ndjsonHeaders() });
+   } catch (err) {
+    // ストリーム生成前（アップロード / ワークフロー起動）での失敗。
+    // この経路と上の finally は排他なので span.end() が二重にはならない
+    const error = err instanceof Error ? err : new Error(String(err));
+    span.recordException(error);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    span.end();
+    logError('dify.workflow.run: failed before streaming', error);
+    return Response.json({ error: 'ワークフローの起動に失敗しました' }, { status: 500 });
+   }
   });
 }
 ```
+
+**span の寿命に注意。** 通常のハンドラでは `startActiveSpan` を使うが（`gcp-observability-nextjs` 参照）、
+ここは `ReadableStream` が `Response` を返した後も動き続けるため例外。
+`startActiveSpan` にすると span が配信開始時点で閉じ、ワークフローの実行時間が計測されない。
 
 ### Step 7: クライアント側 NDJSON コンシューマ
 
@@ -468,7 +497,7 @@ await consumeWorkflowStream(res.body, (evt) => {
 6. **`outputs.structured_output.X` と `outputs.X` 両対応**：Dify バージョン・End ブロック設定で揺れるため、`{ ...outputs.structured_output, ...outputs }` で merge してから個別キーを取り出す。
 7. **`X-Accel-Buffering: no`**：Cloud Run / nginx でストリームがバッファされてしまう事故を防ぐ。
 8. **`USE_DIFY=0` でサンプル経路に逃がす**：Dify を立ち上げずに UI 開発できる。Route Handler の早期 return で同じ NDJSON プロトコルを返せばクライアントは無改修。
-9. **OTel `withSpan` で包む**：上流の `traceparent` / `x-cloud-trace-context` を引き回せば Cloud Trace で Dify 呼び出し含めて 1 トレースに収まる（`gcp-observability-nextjs` スキル参照）。
+9. **OTel `startActiveSpan` で包む**：アクティブなコンテキストが伝播するので、Cloud Trace で Dify 呼び出し含めて 1 トレースに収まる（`gcp-observability-nextjs` スキル参照）。
 
 ## 採用しない選択肢
 
