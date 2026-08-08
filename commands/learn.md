@@ -26,7 +26,7 @@ description: セッションを振り返り、再利用可能な知見を抽出�
 | このプロジェクト固有（チームでも有用） | プロジェクトの `.claude/learnings.md` に追記 |
 | 個人的・プロジェクト横断の好みや事実 | ビルトインのメモリディレクトリ（MEMORY.md 経由） |
 | 汎用的な技術手順で、トリガー条件が明確に書ける | `~/.claude/skills/<name>/SKILL.md` として新規スキル化を**提案**（作成前にユーザーへ内容を確認） |
-| 再発している問題・二度と壊したくない挙動 | `evals/cases/` に eval ケースとして追加を**提案**（`/crystal:eval add` と同形式） |
+| 再発している問題・二度と壊したくない挙動 | `evals/cases/` への eval ケース追加を**提案**し、承認後は `/crystal:eval add` に委ねる（下記 2.5） |
 | 後から「なぜこうしたか」を問われる技術的決定 | `.claude/decisions.md` に追記し、重要なものは `docs/adr/` への昇格を**提案**（下記 2.6） |
 
 `.claude/learnings.md` は SessionStart hook（`session-learnings.sh`）が次回以降の
@@ -42,7 +42,10 @@ description: セッションを振り返り、再利用可能な知見を抽出�
 - 今回のセッション内（同じ失敗を複数回修正した等）
 
 提案時は id / type (command 優先、主観評価のみ rubric) / run（または rubric の観点）の案を
-示し、ユーザー承認後に `evals/cases/<id>.md` を作成する。形式は `${CLAUDE_PLUGIN_ROOT}/templates/eval-case.md` に従う。
+示すにとどめ、**この場でケースファイルを作らない**。ユーザーが承認したら
+`/crystal:eval add` の手順に従うこと（作成後に `eval-run.sh <id>` を 1 回実行して
+動作を確認し、git commit を提案するところまで）。ここで直接書くと、
+書式ミスや `run:` の誤りを抱えたケースが未検証のまま eval セットに入る。
 
 ### 2.6. 決定の記録と ADR 化
 

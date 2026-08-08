@@ -62,9 +62,11 @@ claude plugin install crystal@yuki --scope user
 - **実行できるコマンドは「全体一致」で限定される**: この実行は Claude Code の Bash ツールを
   通らないため、権限プロンプトも PreToolUse(`pre-bash-guard.sh`)もかからない。
   したがって許可はコマンド**全体**が既定パターンのどれかに完全一致する場合だけとする:
-  `npm|pnpm|yarn|bun test` / `… run <script>` / `npx vitest run` / `pytest [-q]` /
-  `tsc --noEmit` / `go test ./...` / `cargo test|check|clippy` / `make test|check|lint` /
-  `mvn|gradle test|verify|check` / `git status --porcelain` など。
+  `npm|pnpm|yarn|bun test` / `… run <script>` / `npx vitest run` / `pytest [-qxvs]` /
+  `tsc --noEmit` / `ruff check|mypy|eslint|shellcheck <path>` / `go test|vet ./...` /
+  `cargo test|check|clippy` / `make test|check|lint` / `mvn|gradle test|verify|check` /
+  `git status --porcelain|diff --exit-code|diff --quiet` など
+  (全体は `hooks/goal-gate.sh` の `VERIFY_RE` が正)。
   **コマンド名の先頭トークンだけで許可してはいけない**: `node` / `python` / `git` / `make` /
   `go` / `cargo` / `npx` は引数だけで任意コードを実行できる汎用ランナーであり、
   `node -e '…'`、`git -c alias.x='!…' x`、`make -f evil.mk`、`npx -y <pkg>` が
