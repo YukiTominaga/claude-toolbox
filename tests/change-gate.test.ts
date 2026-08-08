@@ -113,6 +113,109 @@ describe("change-gate.sh", () => {
     });
   });
 
+  describe("差し戻しの記録で自分の再停止だけを素通しする", () => {
+    // stop_hook_active は「どれかの Stop hook が差し戻した」フラグで、自分のものとは
+    // 限らない。フラグだけで素通しすると、stop-gate の差し戻しがこのゲートの検査を
+    // 丸ごと免除してしまう (テストを書かないまま完了できる抜け穴になる)
+    const SID = "sess-1";
+
+    it("他のゲートが差し戻した再停止では検査を続行する", () => {
+      const r = runChangeGate({ added: IMPL, stopHookActive: true, sessionId: SID });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("自分が差し戻した再停止では素通しし、記録を消す", () => {
+      const r = runChangeGate({
+        added: IMPL,
+        stopHookActive: true,
+        sessionId: SID,
+        ownBlockMarker: true,
+      });
+
+      expect(r.exitCode).toBe(0);
+      expect(r.ownBlockMarkerRemains).toBe(false);
+    });
+
+    it("差し戻すときに自分の記録を残す", () => {
+      const r = runChangeGate({ added: IMPL, sessionId: SID });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.ownBlockMarkerRemains).toBe(true);
+    });
+
+    it("session_id が取れないビルドでは従来どおりチェーン全体で素通しする", () => {
+      const r = runChangeGate({ added: IMPL, stopHookActive: true });
+
+      expect(r.exitCode).toBe(0);
+    });
+  });
+
+  describe("このセッションの作業痕跡で発火を絞る", () => {
+    // 作業ツリーはセッション開始前から汚れていることがある (人間の書きかけ等)。
+    // 会話だけのターンまで差し戻すと、ゲートは毎ターン鳴る警報になり無視される
+    const SID = "sess-1";
+
+    it("作業痕跡の無い会話だけのターンでは、ツリーが汚れていても発火しない", () => {
+      const r = runChangeGate({ added: IMPL, events: [] });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("セッションがドキュメントだけを編集したなら、ツリーの実装汚れでは発火しない", () => {
+      const r = runChangeGate({
+        added: { ...IMPL, "README.md": "# doc\n" },
+        events: [{ edit: "README.md" }],
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("セッションが実装を編集したら従来どおり対を要求する", () => {
+      const r = runChangeGate({ added: IMPL, events: [{ edit: "src/auth.ts" }] });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("Bash で書き換えた痕跡があれば、何を触ったか特定できないのでツリー全体を見る", () => {
+      const r = runChangeGate({
+        added: IMPL,
+        events: [{ bash: "sed -i 's/a/b/' src/auth.ts" }],
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("コードを変更したサブエージェントの記録があれば、ツリー全体を見る", () => {
+      const r = runChangeGate({
+        added: IMPL,
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("記録の無いサブエージェント起動 (調査のみ) では発火しない", () => {
+      const r = runChangeGate({
+        added: IMPL,
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: false,
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("transcript が渡らないビルドでは従来どおりツリー全体で判定する", () => {
+      // fail-open で exit 0 にすると、transcript の渡し方が変わった日にゲートが黙って死ぬ
+      const r = runChangeGate({ added: IMPL });
+
+      expect(r.exitCode).toBe(2);
+    });
+  });
+
   describe("テストファイルの命名規約を取りこぼさない", () => {
     // 実装をテスト扱いに誤分類しても差し戻しが甘くなるだけだが、
     // テストをテストと認識できないと、書いたのに差し戻される最悪の誤検出になる

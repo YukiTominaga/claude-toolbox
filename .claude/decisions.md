@@ -88,3 +88,43 @@
   - **免除マーカーのファイルを置かせる**(`.claude/pairing-exempt` 等): 消し忘れが
     残ると以降ずっとゲートが無効になり、無効になったことに誰も気づけない。
 - 影響範囲: `hooks/change-gate.sh`, `rules/testing.md`, `tests/change-gate.test.ts`
+
+## 2026-08-08: サブエージェントの編集は SubagentStop の記録で捕捉する
+
+- 決めたこと: `record-subagent-edits.sh`(SubagentStop)が「コードを変更した
+  サブエージェントがいた」事実だけを状態ファイル
+  (`~/.claude/state/crystal/<session_id>.subagent-code-edits`)に残し、
+  Stop 側のゲートがそれを読む。verify-gate が PASS を受理した時点で記録を消す。
+- 理由: メイン transcript には Task の起動しか現れず、実装をサブエージェントに
+  委譲するだけで verify-gate が丸ごと沈黙する(敵対的レビューで再現)。
+  どの Task 起動が編集したかは tool_use id と agent_id の対応が取れないため、
+  「いた/いなかった」の事実と印の順序だけで判定し、検証後の起動は
+  1 度だけ差し戻して理由の明示で通す。
+- 採らなかった案:
+  - **transcript の timestamp と記録時刻の比較で順序を取る**: メイン transcript の
+    timestamp 形式と `date` の出力形式の突き合わせが環境依存(BSD/GNU)になり、
+    形式が変わった日に静かに壊れる。順序は印の並びだけから取る形にした。
+  - **すべての Task 起動を無条件に変更痕跡とみなす**: 調査エージェントを
+    走らせただけのターンが毎回差し戻される。verify-gate は stop_hook_active で
+    折れない設計なので、抜けられないループになる。
+  - **`claude -p` で検証を別プロセス化して委譲問題ごと消す**: 既存 ADR 相当の
+    判断(コスト・認証環境依存・結果を会話へ戻す経路)で棄却済み。
+- 影響範囲: `hooks/record-subagent-edits.sh`, `hooks/verify-gate.sh`,
+  `hooks/change-gate.sh`, `hooks/stop-gate.sh`, `hooks/lib/classify.sh`, `hooks/hooks.json`
+
+## 2026-08-08: 差し戻しの自他は状態ファイルで区別する
+
+- 決めたこと: change-gate / stop-gate は差し戻した事実を
+  `~/.claude/state/crystal/<session_id>.<gate>.blocked` に記録し、
+  `stop_hook_active` の再停止では「自分の記録があるときだけ」素通しする。
+- 理由: `stop_hook_active` は「どれかの Stop hook が差し戻した」フラグで、
+  自分が差し戻したかは分からない。フラグだけで折れると、change-gate の差し戻し後に
+  追加された壊れたテストを stop-gate が一度も実行しないまま完了できる
+  (ゲート間の相互干渉。敵対的レビューで指摘)。
+- 採らなかった案:
+  - **stop-gate も verify-gate と同様に stop_hook_active で折れない設計にする**:
+    元から落ちているテストを直せないプロジェクトで、ランタイムのブロック上限まで
+    詰まる。脱出口(自分の差し戻し後の再停止では素通し)は残す必要がある。
+  - **フラグでの素通しを全廃する**: session_id が取れないビルドで無限ループになる。
+    session_id 不明時は従来挙動(フラグで素通し)に落とす。
+- 影響範囲: `hooks/change-gate.sh`, `hooks/stop-gate.sh`, `hooks/lib/classify.sh`

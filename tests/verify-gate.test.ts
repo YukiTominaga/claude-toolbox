@@ -103,6 +103,21 @@ describe("verify-gate.sh", () => {
       expect(r.exitCode).toBe(0);
     });
 
+    it("仕様が docs/spec/ のサブディレクトリにあっても発火する", () => {
+      // SPEC_RE は docs/spec/ 配下の全 .md を仕様と認める (change-gate はサブディレクトリの
+      // spec で満足する)。発火条件が直下しか見ないと、仕様を機能別ディレクトリに
+      // 整理した途端このゲートだけが黙って死ぬ
+      const r = runVerifyGate({
+        added: {
+          "src/auth.ts": "x\n",
+          "docs/spec/auth/login.md": "# 仕様\n",
+        },
+        events: [{ edit: "src/auth.ts" }],
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
     it("docs/spec/ が無ければ発火しない", () => {
       // 仕様が無い状態で verifier を呼んでも「検証不能」しか返らず、
       // 差し戻しても状況が変わらない = 抜けられないループになる
@@ -186,6 +201,26 @@ describe("verify-gate.sh", () => {
       expect(r.exitCode).toBe(2);
     });
 
+    it("FAIL の detail に PASS を含む文字列があっても合格にしない", () => {
+      // 合否を行全体への部分一致で見ると "FAIL AC-PASSWORD-VALIDATION" が合格扱いになる。
+      // AC の ID は仕様を書いた側が命名するため、偶発的にも意図的にも踏める
+      const r = runVerifyGate({
+        added: REPO,
+        events: [
+          {
+            edit: "src/auth.ts",
+          },
+          {
+            agent: "crystal:verifier",
+            result: "満たさない: 1件\n\nCRYSTAL-VERDICT: FAIL AC-PASSWORD-VALIDATION",
+          },
+        ],
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("独立検証が不合格です");
+    });
+
     it("散文で「満たさない」と書かれていても、判定行が PASS なら通す", () => {
       // 判定は 1 行の契約だけを見る。散文の読解に戻すと判定基準が曖昧になる
       const r = runVerifyGate({
@@ -261,6 +296,126 @@ describe("verify-gate.sh", () => {
 
       expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) expect(line).toMatch(re);
+    });
+  });
+
+  describe("サブエージェントに委譲した実装も検証の対象にする", () => {
+    // メイン transcript にはサブエージェントの編集が現れないため、実装を Task で
+    // 委譲するだけでゲートが沈黙していた。record-subagent-edits.sh (SubagentStop) の
+    // 記録があるときは、サブエージェント起動を「コードが変わったかもしれない」として扱う
+    const SID = "sess-1";
+
+    it("サブエージェントがコードを変更し、verifier を呼んでいなければ差し戻す", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("サブエージェント");
+    });
+
+    it("verifier を一度も呼んでいない場合は stop_hook_active でも折れない", () => {
+      // verifier を呼べば VERIFY が最後の印になって自然に抜けられる
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+        stopHookActive: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("サブエージェントの変更後に verifier が PASS すれば通し、記録を消す", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ agent: "general-purpose" }, { agent: "crystal:verifier" }],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+      });
+
+      expect(r.exitCode).toBe(0);
+      expect(r.subagentEditsRemain).toBe(false);
+    });
+
+    it("検証後のサブエージェント起動は 1 度だけ差し戻す", () => {
+      // どの起動がコードを変更したかは記録から分からない。調査エージェントかも
+      // しれないので、change-gate と同じく理由の明示で通す
+      const r = runVerifyGate({
+        added: REPO,
+        events: [
+          { agent: "general-purpose" },
+          { agent: "crystal:verifier" },
+          { agent: "Explore" },
+        ],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("検証後にサブエージェント");
+    });
+
+    it("検証後のサブエージェント起動は、再停止では通して記録を消す", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [
+          { agent: "general-purpose" },
+          { agent: "crystal:verifier" },
+          { agent: "Explore" },
+        ],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+        stopHookActive: true,
+      });
+
+      expect(r.exitCode).toBe(0);
+      expect(r.subagentEditsRemain).toBe(false);
+    });
+
+    it("verifier が FAIL のままなら、後からサブエージェントが動いていても折れない", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [
+          { agent: "general-purpose" },
+          {
+            agent: "crystal:verifier",
+            result: "CRYSTAL-VERDICT: FAIL AC-1",
+          },
+          { agent: "Explore" },
+        ],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+        stopHookActive: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("独立検証が不合格です");
+    });
+
+    it("コードを変更したサブエージェントの記録が無ければ、起動だけでは差し戻さない", () => {
+      // 調査・レビュー専門のエージェントを走らせただけのターンを差し戻す誤検出を出さない
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: false,
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("session_id が取れないビルドでは従来どおり素通しする (fail-open)", () => {
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ agent: "general-purpose" }],
+      });
+
+      expect(r.exitCode).toBe(0);
     });
   });
 

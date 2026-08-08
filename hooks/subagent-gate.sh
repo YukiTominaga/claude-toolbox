@@ -53,14 +53,17 @@ tp=$(printf '%s' "$input" | jq -r '.agent_transcript_path // empty' 2>/dev/null)
 # 調査・レビュー専門のエージェントは定義上ファイルを触らないため、変更痕跡の有無で切り分ける。
 # 代償: 何も変更していないエージェントの偽りの検証主張は素通しするが、
 # 何も壊していない以上、調査結果を丸ごと失わせるより害が小さい。
-edits=$(jq -Rr 'fromjson? // empty
+# Bash 書き換えの検出規則は他の hook と共有する (hooks/lib/classify.sh の BASH_WRITE_RE)
+. "$(dirname "${BASH_SOURCE[0]}")/lib/classify.sh"
+
+edits=$(jq -Rr --arg bashwrite "$BASH_WRITE_RE" 'fromjson? // empty
   | select(.type=="assistant") | .message.content[]?
   | select(.type=="tool_use")
   | if (.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit")
     then .name
     # Bash 経由の書き換え(sed -i / tee / リダイレクト / patch 等)も変更とみなす。
     # 編集ツールを使わずにファイルを書き換えたエージェントを取りこぼさないため
-    elif .name=="Bash" and ((.input.command // "") | test("(^|[;&|(]|&&)[[:space:]]*(sudo[[:space:]]+)?(sed[[:space:]]+-[a-zA-Z]*i|perl[[:space:]]+-[a-zA-Z]*i|tee|patch|install|dd)([[:space:]]|$)|>>?[[:space:]]*[^&]|git[[:space:]]+(apply|checkout|restore|revert|stash[[:space:]]+pop)"))
+    elif .name=="Bash" and ((.input.command // "") | test($bashwrite))
     then "Bash"
     else empty end' "$tp" 2>/dev/null)
 [ -n "$edits" ] || exit 0

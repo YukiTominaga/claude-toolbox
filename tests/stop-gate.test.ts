@@ -31,4 +31,87 @@ describe("stop-gate.sh", () => {
 
     expect(r.exitCode).toBe(0);
   });
+
+  describe("差し戻しの記録で自分の再停止だけを素通しする", () => {
+    // stop_hook_active は「どれかの Stop hook が差し戻した」フラグ。フラグだけで
+    // 素通しすると、change-gate の差し戻し後に追加された壊れたテストを
+    // 一度も実行しないまま完了できてしまう
+    const SID = "sess-1";
+
+    it("他のゲートが差し戻した再停止では検証を実行する", () => {
+      const r = runStopGate({ testScript: "exit 1", stopHookActive: true, sessionId: SID });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("自分が差し戻した再停止では素通しする (詰まないための脱出口)", () => {
+      const r = runStopGate({
+        testScript: "exit 1",
+        stopHookActive: true,
+        sessionId: SID,
+        ownBlockMarker: true,
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("session_id が取れないビルドでは従来どおりチェーン全体で素通しする", () => {
+      const r = runStopGate({ testScript: "exit 1", stopHookActive: true });
+
+      expect(r.exitCode).toBe(0);
+    });
+  });
+
+  describe("このセッションの作業痕跡で発火を絞る", () => {
+    const SID = "sess-1";
+
+    it("作業痕跡の無い会話だけのターンでは、ツリーが汚れていても検証を回さない", () => {
+      const r = runStopGate({ testScript: "exit 1", events: [] });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("編集ツールの痕跡があれば検証を回す", () => {
+      const r = runStopGate({ testScript: "exit 1", events: [{ edit: "src/a.ts" }] });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("Bash で書き換えた痕跡があれば検証を回す", () => {
+      const r = runStopGate({
+        testScript: "exit 1",
+        events: [{ bash: "sed -i 's/a/b/' src/a.ts" }],
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("コードを変更したサブエージェントの記録があれば検証を回す", () => {
+      const r = runStopGate({
+        testScript: "exit 1",
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: true,
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
+    it("記録の無いサブエージェント起動 (調査のみ) では検証を回さない", () => {
+      const r = runStopGate({
+        testScript: "exit 1",
+        events: [{ agent: "general-purpose" }],
+        sessionId: SID,
+        subagentEditsRecorded: false,
+      });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("transcript が渡らないビルドでは従来どおり検証を回す", () => {
+      const r = runStopGate({ testScript: "exit 1" });
+
+      expect(r.exitCode).toBe(2);
+    });
+  });
 });

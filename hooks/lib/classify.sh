@@ -33,6 +33,50 @@ SPEC_RE='^docs/specs?/.+\.md$'
 # (剥がさないと `/home/me/specs/proj/src/a.ts` のような親ディレクトリ名に引きずられる)。
 CODE_RE="${IMPL_RE}|${TEST_RE}"
 
+# Bash コマンドによるファイル書き換えの可能性の検出 (jq の test() に渡す)。
+# subagent-gate.sh と session_work_marks() が共有する。
+# 部分一致にせずコマンド先頭 (または ; && || | ( の直後) にのみ当てる。
+BASH_WRITE_RE='(^|[;&|(]|&&)[[:space:]]*(sudo[[:space:]]+)?(sed[[:space:]]+-[a-zA-Z]*i|perl[[:space:]]+-[a-zA-Z]*i|tee|patch|install|dd)([[:space:]]|$)|>>?[[:space:]]*[^&]|git[[:space:]]+(apply|checkout|restore|revert|stash[[:space:]]+pop)'
+
+# ゲート間で共有する状態の置き場。
+# stop_hook_active はチェーン内のどの Stop hook が差し戻しても立つため、
+# 「自分が差し戻した再停止か」はフラグからは分からない。各ゲートが自分の差し戻しを
+# ここに記録し、自分の記録がある再停止だけを素通しする (他ゲートの差し戻しでは検査を行う)。
+# サブエージェントによるコード変更の記録 (record-subagent-edits.sh) も同じ場所に置く。
+crystal_state_dir() {
+  printf '%s/state/crystal' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+}
+
+# セッション中にコードを変更したサブエージェントの記録ファイル。
+# record-subagent-edits.sh (SubagentStop) が書き、Stop 側のゲートが読む。
+# verify-gate.sh が PASS を受理した時点で消す。
+subagent_edits_file() { # $1 = session_id
+  printf '%s/%s.subagent-code-edits' "$(crystal_state_dir)" "$1"
+}
+
+# メイン transcript からセッションの作業痕跡を時系列の印として出す:
+#   FILE\t<path>  編集ツールによる書き換え (パスは記録どおり = 通常は絶対パス)
+#   BASH          Bash によるファイル書き換えの可能性があるコマンド
+#   AGENT         verifier 以外のサブエージェント起動 (何を編集したかはここからは分からない)
+#   VERIFY\t<id>  crystal:verifier の起動 (id は tool_use id。戻り値の判定行を引くのに使う)
+# サブエージェント起動ツールの名前はビルドにより Agent / Task の両方がある。
+# jq は JSONL の途中に壊れた行があるとその場で終了するため、行単位で読んで不正行を捨てる。
+session_work_marks() { # $1 = transcript path
+  jq -Rr --arg bashwrite "$BASH_WRITE_RE" '
+    fromjson? // empty
+    | select(.type=="assistant") | .message.content[]?
+    | select(.type=="tool_use")
+    | if (.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit")
+      then "FILE\t" + (.input.file_path // "")
+      elif (.name=="Task" or .name=="Agent")
+      then (if ((.input.subagent_type // "") | test("verifier"))
+            then "VERIFY\t" + (.id // "")
+            else "AGENT" end)
+      elif (.name=="Bash" and ((.input.command // "") | test($bashwrite)))
+      then "BASH"
+      else empty end' "$1" 2>/dev/null
+}
+
 # 変更ファイルの一覧 (作業ツリー + index + 未追跡)。
 # 初回コミット前は HEAD が無く `git diff HEAD` が失敗するが、未追跡分だけで判定できる。
 changed_files() {
