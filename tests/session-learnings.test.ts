@@ -27,7 +27,7 @@ describe("session-learnings.sh", () => {
       "## 2026-07-20: hooks は node と jq を前提にしている",
       "PATH に無い環境では静かにスキップされる。",
       "",
-      "## 2026-07-25: goal.md は .gitignore に入れる",
+      "## 2026-07-25: decisions.md は commit する",
       "untracked のままだと stop-gate の変更なし判定を汚染する。",
       "",
     ].join("\n");
@@ -35,7 +35,7 @@ describe("session-learnings.sh", () => {
     const r = runSessionLearnings(md);
 
     expect(r.context).toContain("hooks は node と jq を前提にしている");
-    expect(r.context).toContain("goal.md は .gitignore に入れる");
+    expect(r.context).toContain("decisions.md は commit する");
     // 全文が載っているので切り詰めの注記は付かない
     expect(r.context).not.toContain("末尾のみ");
   });

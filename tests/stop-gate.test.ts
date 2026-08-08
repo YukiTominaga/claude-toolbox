@@ -26,44 +26,8 @@ describe("stop-gate.sh", () => {
     expect(r.stderr).toContain("検証ゲート失敗");
   });
 
-  it("ゴールが active の間は stop_hook_active でも素通ししない", () => {
-    // goal-gate は stop_hook_active を無視して毎ターン差し戻すため、
-    // ここで素通しするとゴールループ中は実検証が一度も走らなくなる
-    const r = runStopGate({
-      testScript: "exit 1",
-      goalStatus: "active",
-      stopHookActive: true,
-    });
-
-    expect(r.exitCode).toBe(2);
-  });
-
-  it("完了条件に検証コマンドがあっても、ゴールが active なら素通ししない", () => {
-    // goal-gate が実際に実行するのは「## 完了条件」内かつ許可パターンに一致した
-    // コマンドだけ。その条件を stop-gate 側で再現しようとすると両者がずれ、
-    // どちらも実検証しないゴール(例: 許可パターン外の `flutter test`)が生まれる
-    const r = runStopGate({
-      testScript: "exit 1",
-      goalStatus: "active",
-      goalVerifyCmd: "flutter test",
-      stopHookActive: true,
-    });
-
-    expect(r.exitCode).toBe(2);
-  });
-
-  it("ゴールが無ければ stop_hook_active で素通しする", () => {
+  it("差し戻し後の再停止 (stop_hook_active) では素通しする", () => {
     const r = runStopGate({ testScript: "exit 1", stopHookActive: true });
-
-    expect(r.exitCode).toBe(0);
-  });
-
-  it("ゴールが done なら stop_hook_active で素通しする", () => {
-    const r = runStopGate({
-      testScript: "exit 1",
-      goalStatus: "done",
-      stopHookActive: true,
-    });
 
     expect(r.exitCode).toBe(0);
   });
