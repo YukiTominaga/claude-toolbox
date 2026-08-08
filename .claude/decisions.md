@@ -25,6 +25,7 @@
     plugin の責務として残るため、plugin からは落としきる方を採った。
 - 影響範囲: `hooks/`(6 本に縮小)、`commands/`(3 本に縮小)、`rules/`(3 本に縮小)、
   `scripts/`、`templates/`、`tests/`、README、`.claude-plugin/*.json`(v0.9.0)
+  → ADR-0001
 
 ## 2026-08-08: 目的 3 は「verifier サブエージェントの呼び出しを強制する」形で実現する
 
@@ -48,6 +49,7 @@
     までに留めた。
 - 影響範囲: `hooks/verify-gate.sh`(新規), `hooks/lib/classify.sh`(新規), `hooks/hooks.json`,
   `hooks/change-gate.sh`, `agents/verifier.md`, `tests/verify-gate.test.ts`
+  → ADR-0002
 
 ## 2026-08-08: verifier の合否は「番兵 1 行」で読む
 
@@ -72,6 +74,7 @@
     判定行が返らず、`claude plugin update` を打つ前に応答を終えられなくなる。
 - 影響範囲: `hooks/verify-gate.sh`, `agents/verifier.md`, `tests/verify-gate.test.ts`,
   `docs/spec/verify-gate.md`
+  → ADR-0003
 
 ## 2026-08-08: 目的 2・4 のゲートは「1 度だけ差し戻す」形にする
 
@@ -88,6 +91,7 @@
   - **免除マーカーのファイルを置かせる**(`.claude/pairing-exempt` 等): 消し忘れが
     残ると以降ずっとゲートが無効になり、無効になったことに誰も気づけない。
 - 影響範囲: `hooks/change-gate.sh`, `rules/testing.md`, `tests/change-gate.test.ts`
+  → ADR-0004
 
 ## 2026-08-08: サブエージェントの編集は SubagentStop の記録で捕捉する
 
@@ -111,6 +115,7 @@
     判断(コスト・認証環境依存・結果を会話へ戻す経路)で棄却済み。
 - 影響範囲: `hooks/record-subagent-edits.sh`, `hooks/verify-gate.sh`,
   `hooks/change-gate.sh`, `hooks/stop-gate.sh`, `hooks/lib/classify.sh`, `hooks/hooks.json`
+  → ADR-0005
 
 ## 2026-08-08: 差し戻しの自他は状態ファイルで区別する
 
@@ -128,3 +133,5 @@
   - **フラグでの素通しを全廃する**: session_id が取れないビルドで無限ループになる。
     session_id 不明時は従来挙動(フラグで素通し)に落とす。
 - 影響範囲: `hooks/change-gate.sh`, `hooks/stop-gate.sh`, `hooks/lib/classify.sh`
+  → ADR-0006
+
