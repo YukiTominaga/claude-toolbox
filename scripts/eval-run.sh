@@ -6,6 +6,15 @@
 # 1 件でも FAIL があれば exit 1。claude CLI 不在時、rubric 型は SKIP になる。
 set -u
 
+# プラグイン同梱スクリプトを、ケースの run から参照できるようにする。
+# ケースはプロジェクトの git 管理下にあり、プラグインの絶対パス(インストール先は
+# 環境ごとに違う)を埋め込めないため、`$CLAUDE_PLUGIN_ROOT/scripts/adr-lint.sh` の形で
+# 書けるようにしておく。cd する前に自分の位置から解決する。
+if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  CLAUDE_PLUGIN_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+fi
+export CLAUDE_PLUGIN_ROOT
+
 # プロジェクトルートへ移動。`cd .` は必ず成功しガードにならないため、
 # CLAUDE_PROJECT_DIR 未設定時は git のトップレベルにフォールバックする
 # (サブディレクトリから叩いても evals/ を見つけられるようにする)
@@ -22,11 +31,17 @@ if [ ! -d "$CASES_DIR" ]; then
 fi
 
 # frontmatter の値を取得(行末コメント・前後空白・囲みダブルクォートを除去)
+# 引用符は「両端が揃っている場合だけ」外す: gsub(/^"|"$/,"") だと片側だけでも落ちるため、
+# `run: bash "$CLAUDE_PLUGIN_ROOT/scripts/adr-lint.sh"` のように " で終わるコマンドが
+# 末尾だけ剥がされて構文エラー(exit 2)になり、ケースの中身と無関係に FAIL する
 get_field() { # $1=file $2=key
   awk -v k="$2" '
     /^---$/ { fm++; next }
     fm==1 && $0 ~ "^"k":" {
-      sub("^"k": *", ""); sub(" +# .*$", ""); gsub(/^ +| +$/, ""); gsub(/^"|"$/, ""); print; exit
+      sub("^"k": *", ""); sub(" +# .*$", ""); gsub(/^ +| +$/, "")
+      if (length($0) > 1 && substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"")
+        $0 = substr($0, 2, length($0) - 2)
+      print; exit
     }' "$1"
 }
 

@@ -10,7 +10,7 @@
 | `agents/` | `spec-critic`, `verifier` |
 | `commands/` | `/learn`, `/spec`, `/goal`, `/eval`, `/adr` |
 | `hooks/` | `hooks.json` + スクリプト 10 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / subagent-gate / session-rules / session-learnings / audit-config) |
-| `scripts/` | 手動実行系スクリプト(`eval-run.sh`) |
+| `scripts/` | 手動実行系スクリプト(`eval-run.sh`, `adr-lint.sh`) |
 | `rules/` | テスト方針など(SessionStart hook `session-rules.sh` が全セッションに自動注入)。**hook で強制できることは書かない**方針 — [rules/ の方針](#rules-の方針) を参照 |
 | `templates/` | spec / goal / eval-case / adr テンプレート |
 
@@ -248,6 +248,38 @@ crystal に欠けていたのもそこだった。`.claude/learnings.md`(ハマ�
   `/crystal:adr` には材料が無い項目を「材料なし」と明示させ、
   もっともらしい理由で埋めることを禁じてある。誤った ADR は無い ADR より害が大きい
 
+### 構造の機械検証 (`scripts/adr-lint.sh`)
+
+ADR の品質のうち機械判定できる部分は散文に委ねず、`adr-lint.sh` に移してある
+(`docs/adr` を検査。指摘があれば exit 1)。`/crystal:adr` は `list` / 清書後 /
+`supersede` 後にこれを実行する。
+
+| 検出するもの | なぜ散文では防げないか |
+|---|---|
+| 番号の重複 | 採番は「既存の最大 + 1」で、別ブランチ・worktree の ADR は手元から見えない |
+| `superseded` の参照先不在・逆リンク欠落 | 2 ファイルにまたがる編集で、片方だけ済んだ状態を作りやすい |
+| 必須セクションの欠落 | — |
+| 却下案ゼロ | 却下案の無い ADR は「なぜ他を採らなかったか」を残せておらず、主価値を欠く |
+| プレースホルダ(`NNNN` / `YYYY-MM-DD`)の残留 | テンプレートをコピーしただけの ADR を弾く |
+| ステータス値・日付形式・見出し番号の不一致 | — |
+
+**判定できないのは「却下理由が事実か」だけ**で、そこ以外は構造として締められる。
+「ADR は本質的に機械検証できない」は正しくない。
+
+プロジェクト側で常時回すなら、eval ケースにするのが早い(`/crystal:eval add`):
+
+```yaml
+id: adr-structure
+type: command
+description: docs/adr の構造が壊れていない
+run: bash "$CLAUDE_PLUGIN_ROOT/scripts/adr-lint.sh"
+expect_exit: 0
+```
+
+`eval-run.sh` は `CLAUDE_PLUGIN_ROOT` が未設定なら自分の位置から解決して export する。
+ケースはプロジェクトの git 管理下に置かれるため、環境ごとに違うプラグインの
+インストール先を埋め込まずに済ませる必要がある。
+
 ## 更新
 
 リポジトリを編集したら、次の手順で反映する。注意点が 2 つある:
@@ -275,9 +307,10 @@ npm install
 npm test
 ```
 
-vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` の
-振る舞いをテストしている。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
-壊れても手動 E2E では気づけない。`tests/helpers/sandbox.ts` が使い捨ての git リポジトリを作り、
+vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` /
+`adr-lint.sh` / `eval-run.sh` の振る舞いをテストしている。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
+壊れても手動 E2E では気づけない。`adr-lint.sh` は逆に**誤検出しないこと**が要件で、
+妥当な ADR を落とすようになると lint ごと無視されるため、正常系も明示的に押さえている。`tests/helpers/sandbox.ts` が使い捨ての git リポジトリを作り、
 `claude`(judge)と `npm`(DC の検証コマンド)を fake に差し替えて実行する。
 
 ## 構成
