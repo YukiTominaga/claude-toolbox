@@ -113,6 +113,36 @@ describe("subagent-gate.sh", () => {
       expect(r.exitCode).toBe(0);
     });
 
+    // Python 系はランナー経由の実行が標準的。プレフィックスを認めないと、
+    // 正当に検証したエージェントを差し戻す誤検知になる
+    for (const command of [
+      "uv run pytest -q",
+      "poetry run pytest",
+      "pipenv run pytest tests/",
+      "python -m pytest -q",
+      "python3 -m mypy src/",
+      "uv run ruff check .",
+    ] as const) {
+      it(`ランナー経由の検証 (${command}) も認識する`, () => {
+        const r = runSubagentGate({
+          lastMessage: "テストは通りました。",
+          edits: ["src/foo.py"],
+          commands: [command],
+        });
+        expect(r.exitCode).toBe(0);
+      });
+    }
+
+    it("ランナープレフィックスだけでは素通しさせない", () => {
+      // uv run の後続が検証コマンドでなければ、検証の実行痕跡にはならない
+      const r = runSubagentGate({
+        lastMessage: "テストは通りました。",
+        edits: ["src/foo.py"],
+        commands: ["uv run scripts/migrate.py", "python -m http.server"],
+      });
+      expect(r.exitCode).toBe(2);
+    });
+
     it("コマンド連結の後ろに置かれた検証コマンドも認識する", () => {
       const r = runSubagentGate({
         lastMessage: "型チェックが通りました。",
