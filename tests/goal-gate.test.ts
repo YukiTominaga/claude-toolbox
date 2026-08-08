@@ -406,6 +406,44 @@ describe("goal-gate.sh", () => {
       for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
     });
 
+    it("判定ログに cwd が入る (プロジェクト横断ログの識別子)", () => {
+      // goal-gate.jsonl は $HOME 配下でプロジェクトをまたいで積まれる。
+      // cwd が無いと、読む側 (/crystal:adr は却下理由の材料として読み、
+      // ADR という恒久文書に書き込む) が他プロジェクトの履歴と区別できない。
+      const s = sandbox(goalMd());
+      s.setJudgeResponse(
+        JSON.stringify({ met: false, unmet: ["DC-1"], violations: [], reason: "継続" }),
+        0.01,
+      );
+
+      s.run();
+
+      const records = s
+        .readGateLog()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      expect(records.length).toBeGreaterThan(0);
+      for (const r of records) expect(r.cwd).toBe(s.projectDir);
+    });
+
+    it("検証コマンド失敗で差し戻したログにも cwd が入る", () => {
+      // judge を呼ばずに確定させる経路は別の書き込み口を通るため、個別に押さえる
+      const s = sandbox(goalMd());
+      s.setVerifyExitCode(1);
+
+      s.run();
+
+      const records = s
+        .readGateLog()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      const verify = records.filter((r) => r.source === "verify");
+      expect(verify.length).toBeGreaterThan(0);
+      for (const r of verify) expect(r.cwd).toBe(s.projectDir);
+    });
+
     it("再入ガード: CRYSTAL_GOAL_VERIFY が立っていれば何もしない", () => {
       // 検証コマンドが claude セッションを起こしたときに無限に入れ子にならないこと
       const s = sandbox(goalMd());
