@@ -30,7 +30,11 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
 session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 own_marker=""
-[ -n "$session_id" ] && own_marker="$(crystal_state_dir)/${session_id}.change-gate.blocked"
+excused_file=""
+if [ -n "$session_id" ]; then
+  own_marker="$(crystal_state_dir)/${session_id}.change-gate.blocked"
+  excused_file="$(crystal_state_dir)/${session_id}.change-gate.excused"
+fi
 
 # --- 自分の差し戻し後の再停止では素通しする ---
 # 免除(既存テストで担保されるリファクタ、仕様が変わらないバグ修正、
@@ -41,12 +45,17 @@ own_marker=""
 # ただし stop_hook_active は「どれかの Stop hook が差し戻した」フラグであって、
 # 自分が差し戻したかは分からない。フラグだけで素通しすると、stop-gate 等の差し戻しが
 # このゲートの検査を丸ごと免除してしまう。自分の差し戻しの記録があるときだけ素通しする。
+#
+# 素通しの前に指摘内容のダイジェストを記録する必要があるため、ここではフラグを
+# 立てるだけにして、findings の計算後に抜ける (ベースライン方式では免除済みの差分が
+# セッション中ずっと changed に残るので、記録が無いと同じ指摘で毎ターン差し戻す)。
+excuse_pending=0
 if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ]; then
   # session_id が取れないビルドでは従来どおりチェーン全体で素通しする (ループ防止を優先)
   [ -n "$own_marker" ] || exit 0
   if [ -f "$own_marker" ]; then
     rm -f "$own_marker" 2>/dev/null
-    exit 0
+    excuse_pending=1
   fi
   # 差し戻したのは他のゲート。このゲートの検査はまだ通っていないので続行する
 fi
@@ -84,7 +93,9 @@ if [ -n "$tp" ] && [ -f "$tp" ]; then
   fi
 fi
 
-changed=$(changed_files)
+# 比較の基点はセッション開始時点の HEAD (record-baseline.sh が記録)。
+# HEAD 比較のままだと、応答を終える前に commit するだけで差分が消えてゲートが沈黙する
+changed=$(changed_files "$(session_baseline "$session_id")")
 [ -n "$changed" ] || exit 0
 
 if [ "$scope" = "session" ]; then
@@ -113,6 +124,24 @@ if [ "${CRYSTAL_SPEC_GATE:-on}" != "off" ] && [ -z "$specs" ]; then
 - 対になる docs/spec/ の変更がありません。/crystal:spec で仕様を作成・更新してから実装すること。"
 fi
 [ -n "$findings" ] || exit 0
+
+# --- 免除済みの指摘は繰り返さない ---
+# 指摘の内容 (対象の実装ファイル + 欠けている対) をダイジェスト化する。
+# 理由の明示で通した後、同じ状態のままの再停止では差し戻さない。
+# 新しい実装ファイルが増える・欠けている対が変わるとダイジェストが変わり、
+# ゲートは再び有効になる (免除が別の変更まで覆うことはない)。
+digest=$(printf '%s\n--\n%s\n' "$impl" "$findings" | crystal_digest)
+if [ "$excuse_pending" = "1" ]; then
+  if [ -n "$excused_file" ]; then
+    mkdir -p "$(dirname "$excused_file")" 2>/dev/null &&
+      printf '%s\n' "$digest" >"$excused_file" 2>/dev/null
+  fi
+  exit 0
+fi
+if [ -n "$excused_file" ] && [ -f "$excused_file" ] &&
+  [ "$(cat "$excused_file" 2>/dev/null)" = "$digest" ]; then
+  exit 0
+fi
 
 # 自分が差し戻したことを記録する (再停止で自分の分だけを素通しするため)
 if [ -n "$own_marker" ]; then

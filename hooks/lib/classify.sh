@@ -36,7 +36,14 @@ CODE_RE="${IMPL_RE}|${TEST_RE}"
 # Bash コマンドによるファイル書き換えの可能性の検出 (jq の test() に渡す)。
 # subagent-gate.sh と session_work_marks() が共有する。
 # 部分一致にせずコマンド先頭 (または ; && || | ( の直後) にのみ当てる。
-BASH_WRITE_RE='(^|[;&|(]|&&)[[:space:]]*(sudo[[:space:]]+)?(sed[[:space:]]+-[a-zA-Z]*i|perl[[:space:]]+-[a-zA-Z]*i|tee|patch|install|dd)([[:space:]]|$)|>>?[[:space:]]*[^&]|git[[:space:]]+(apply|checkout|restore|revert|stash[[:space:]]+pop)'
+# cp / mv / rsync は「生成したファイルを配置する」普通のワークフローで、
+# sed -i と同じくファイルを書き換える。find -exec / xargs 経由の sed -i も同様
+# (敵対的レビューでこの 4 系統が丸ごと素通りしていた)。
+# 検出できない既知の残り: インタープリタのスクリプト実行によるファイル生成
+# (`python gen.py --out src/a.ts` 等)。コマンド文字列からは書き込みの有無が分からない。
+BASH_WRITE_RE='(^|[;&|(]|&&)[[:space:]]*(sudo[[:space:]]+)?(sed[[:space:]]+-[a-zA-Z]*i|perl[[:space:]]+-[a-zA-Z]*i|tee|patch|install|dd|cp|mv|rsync|truncate|ln)([[:space:]]|$)'
+BASH_WRITE_RE="${BASH_WRITE_RE}|(^|[;&|(]|&&)[[:space:]]*(sudo[[:space:]]+)?(find|xargs)[[:space:]]([^;&|]*[[:space:]])?(sed|perl)[[:space:]]+-[a-zA-Z]*i"
+BASH_WRITE_RE="${BASH_WRITE_RE}|>>?[[:space:]]*[^&]|git[[:space:]]+(apply|checkout|restore|revert|merge|cherry-pick|pull|rebase|stash[[:space:]]+pop)"
 
 # ゲート間で共有する状態の置き場。
 # stop_hook_active はチェーン内のどの Stop hook が差し戻しても立つため、
@@ -54,6 +61,49 @@ subagent_edits_file() { # $1 = session_id
   printf '%s/%s.subagent-code-edits' "$(crystal_state_dir)" "$1"
 }
 
+# セッション開始時点の HEAD の記録 (record-baseline.sh が SessionStart で書く)。
+# ゲートが「作業ツリーの汚れ」だけを見ていると、応答を終える前に git commit する
+# だけで差分が消え、change-gate / verify-gate / stop-gate が全て沈黙する
+# (敵対的レビューで実証された迂回経路)。基点をセッション開始時点に固定し、
+# セッション中に commit された変更も判定対象に含める。
+session_baseline_file() { # $1 = session_id
+  printf '%s/%s.baseline' "$(crystal_state_dir)" "$1"
+}
+
+# 記録済みのベースライン commit を出力する。使えないときは何も出力しない
+# (呼び出し側は changed_files のフォールバック = HEAD 比較になる)。
+session_baseline() { # $1 = session_id (空を許す)
+  [ -n "${1:-}" ] || return 0
+  local f c
+  f=$(session_baseline_file "$1")
+  [ -f "$f" ] || return 0
+  c=$(cat "$f" 2>/dev/null)
+  [ -n "$c" ] || return 0
+  # 記録が別リポジトリのものだったり、履歴の書き換えで消えていたら使わない
+  git cat-file -e "${c}^{commit}" 2>/dev/null || return 0
+  printf '%s' "$c"
+}
+
+# 標準入力のダイジェスト (状態ファイルへの記録・比較用。暗号強度は不要)
+crystal_digest() {
+  cksum | awk '{print $1 "-" $2}'
+}
+
+# 作業ツリー全体の状態 (HEAD + 追跡差分 + 未追跡ファイルの中身) のダイジェスト。
+# ベースライン方式では検証済みの変更がセッション中ずっと差分として残るため、
+# stop-gate はこれで「前回検証した状態と同一か」を判定し、会話だけのターンで
+# 毎回フルテストが走るのを避ける。
+tree_digest() {
+  {
+    git rev-parse HEAD 2>/dev/null
+    git status --porcelain 2>/dev/null
+    git diff HEAD 2>/dev/null
+    git ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
+      cksum "$f" 2>/dev/null
+    done
+  } | crystal_digest
+}
+
 # メイン transcript からセッションの作業痕跡を時系列の印として出す:
 #   FILE\t<path>  編集ツールによる書き換え (パスは記録どおり = 通常は絶対パス)
 #   BASH          Bash によるファイル書き換えの可能性があるコマンド
@@ -69,7 +119,10 @@ session_work_marks() { # $1 = transcript path
     | if (.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit")
       then "FILE\t" + (.input.file_path // "")
       elif (.name=="Task" or .name=="Agent")
-      then (if ((.input.subagent_type // "") | test("verifier"))
+      # 部分一致 ("verifier" を含む) にすると、判定行の契約を持たない他所の
+      # 「my-verifier-x」のような別エージェントで VERIFY 印が立ってしまう。
+      # 名前そのもの、またはプラグイン接頭辞付き (crystal:verifier) だけを認める
+      then (if ((.input.subagent_type // "") | test("(^|[:/])verifier$"))
             then "VERIFY\t" + (.id // "")
             else "AGENT" end)
       elif (.name=="Bash" and ((.input.command // "") | test($bashwrite)))
@@ -77,10 +130,14 @@ session_work_marks() { # $1 = transcript path
       else empty end' "$1" 2>/dev/null
 }
 
-# 変更ファイルの一覧 (作業ツリー + index + 未追跡)。
+# 変更ファイルの一覧 (作業ツリー + index + 未追跡 + ベースラインからの commit 済み差分)。
+# $1 にベースライン commit を渡すと、セッション中に commit された変更も含める
+# (渡さない・空なら従来どおり HEAD 比較 = fail-open)。
 # 初回コミット前は HEAD が無く `git diff HEAD` が失敗するが、未追跡分だけで判定できる。
-changed_files() {
+changed_files() { # $1 = 比較の基点 (省略時 HEAD)
+  local base="${1:-HEAD}"
   {
+    git diff --name-only "$base" 2>/dev/null
     git diff --name-only HEAD 2>/dev/null
     git diff --cached --name-only 2>/dev/null
     git ls-files --others --exclude-standard 2>/dev/null

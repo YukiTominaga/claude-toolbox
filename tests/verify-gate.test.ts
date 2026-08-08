@@ -440,6 +440,17 @@ describe("verify-gate.sh", () => {
       expect(r.exitCode).toBe(0);
     });
 
+    it("名前に verifier を含むだけの別エージェントでは通らない", () => {
+      // 部分一致にすると、判定行の契約を持たない他所の「〜verifier〜」エージェントで
+      // VERIFY 印が立ち、判定行が読めない経路 (1 度で諦める) から抜けられてしまう
+      const r = runVerifyGate({
+        added: REPO,
+        events: [{ edit: "src/auth.ts" }, { agent: "my-verifier-lite" }],
+      });
+
+      expect(r.exitCode).toBe(2);
+    });
+
     it("Write / MultiEdit による変更も変更として数える", () => {
       const r = runVerifyGate({
         added: REPO,

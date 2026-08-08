@@ -34,7 +34,12 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 # 分類の定義は change-gate.sh と共有する
 . "$(dirname "${BASH_SOURCE[0]}")/lib/classify.sh"
 
-changed=$(changed_files)
+session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+
+# 比較の基点はセッション開始時点の HEAD (record-baseline.sh が記録)。
+# HEAD 比較のままだと、応答を終える前に commit するだけで実装差分が消え、
+# 独立検証の強制がまるごと沈黙する
+changed=$(changed_files "$(session_baseline "$session_id")")
 [ -n "$changed" ] || exit 0
 impl=$(impl_files "$changed")
 [ -n "$impl" ] || exit 0
@@ -63,7 +68,6 @@ tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 # record-subagent-edits.sh (SubagentStop) が残した記録があるときだけ、
 # サブエージェント起動 (AGENT 印) を「コードが変わったかもしれない」として扱う。
 # 記録が無ければ AGENT 印は無視する (調査エージェントを差し戻す誤検出を出さない)。
-session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 sub_state=""
 sub_edits=0
 if [ -n "$session_id" ]; then
@@ -155,7 +159,6 @@ fail_block() { # $1 = 判定行
     [ -n "$detail" ] && printf '未達: %s\n' "$detail"
     printf '\nverifier の報告にある「満たさない」「未検証」の項目を解消してから、再度 verifier を通すこと。\n'
     printf '仕様の側が実態と合っていない場合は、docs/spec/ を直すのが正しい解決になることもあります。\n'
-    printf '(このゲートを一時的に外す場合は CRYSTAL_VERIFY_GATE=off)\n'
   } >&2
   exit 2
 }

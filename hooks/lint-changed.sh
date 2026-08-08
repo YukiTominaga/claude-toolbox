@@ -8,7 +8,14 @@ file=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null
 [ -z "$file" ] && exit 0
 [ -f "$file" ] || exit 0
 
-cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
+# `cd .` は必ず成功するため `cd "${CLAUDE_PROJECT_DIR:-.}"` はガードにならず、
+# 未設定時にカレント (モノレポのサブパッケージ等) で設定探索してしまう。
+# 他の hook と同じく git のトップレベルへフォールバックする
+project_dir="${CLAUDE_PROJECT_DIR:-}"
+if [ -z "$project_dir" ]; then
+  project_dir=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+fi
+cd "$project_dir" || exit 0
 
 # eslint の設定がプロジェクトに存在するか。
 # eslint 本体は親ディレクトリや global から解決できてしまうため、
