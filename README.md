@@ -8,11 +8,11 @@
 |---|---|
 | `skills/` | 自作スキル 11 個 |
 | `agents/` | `spec-critic`, `verifier` |
-| `commands/` | `/learn`, `/spec`, `/goal`, `/eval` |
+| `commands/` | `/learn`, `/spec`, `/goal`, `/eval`, `/adr` |
 | `hooks/` | `hooks.json` + スクリプト 10 本(破壊コマンドガード / format-on-save / lint / bash ログ / stop-gate / goal-gate / subagent-gate / session-rules / session-learnings / audit-config) |
 | `scripts/` | 手動実行系スクリプト(`eval-run.sh`) |
 | `rules/` | テスト方針など(SessionStart hook `session-rules.sh` が全セッションに自動注入)。**hook で強制できることは書かない**方針 — [rules/ の方針](#rules-の方針) を参照 |
-| `templates/` | spec / goal / eval-case テンプレート |
+| `templates/` | spec / goal / eval-case / adr テンプレート |
 
 > 共有 skill(`bigquery-basics` などの公式/共有アセット)は本リポジトリには含めず、`~/.claude/skills` 側でシンボリックリンクとして別管理する。
 
@@ -25,7 +25,7 @@ claude plugin install crystal@yuki --scope user
 
 新しいセッションで有効化される。以降:
 
-- コマンド: `crystal:spec` / `crystal:learn` / `crystal:goal` / `crystal:eval`
+- コマンド: `crystal:spec` / `crystal:learn` / `crystal:goal` / `crystal:eval` / `crystal:adr`
 - サブエージェント: `crystal:spec-critic` / `crystal:verifier`
 - スキル 11 個は `crystal` 由来でロード
 - hooks(SessionStart/PreToolUse/PostToolUse/SubagentStop/Stop)が自動登録され、
@@ -45,7 +45,7 @@ claude plugin install crystal@yuki --scope user
 | Skills(プロジェクト固有の作業知識) | `skills/` 11 個 + `rules/`(SessionStart hook が全セッションに注入) |
 | Plugins / Connectors(外部ツール接続) | 本リポジトリ自体が plugin。MCP 接続は各プロジェクト側の設定に任せる |
 | Sub-agents(実装者と検証者の分離) | 常時は `subagent-gate.sh` / `stop-gate.sh`(hook)。`crystal:verifier` / `crystal:spec-critic` は**明示呼び出し時のみ** |
-| 外部メモリ(実行間で状態を失わない) | `.claude/goal.md` の `## 判定履歴` / `docs/spec/` / `.claude/learnings.md`(SessionStart hook が自動注入) / `evals/` |
+| 外部メモリ(実行間で状態を失わない) | `.claude/goal.md` の `## 判定履歴` / `docs/spec/` / `.claude/learnings.md`(SessionStart hook が自動注入) / `.claude/decisions.md` → `docs/adr/` / `evals/` |
 
 ループ本体は Stop hook `goal-gate.sh`。`/crystal:goal` で完了条件を `.claude/goal.md` に
 定義すると(`docs/spec/` に approved な仕様があれば受け入れ条件を自動インポート)、
@@ -62,9 +62,11 @@ claude plugin install crystal@yuki --scope user
 - **実行できるコマンドは「全体一致」で限定される**: この実行は Claude Code の Bash ツールを
   通らないため、権限プロンプトも PreToolUse(`pre-bash-guard.sh`)もかからない。
   したがって許可はコマンド**全体**が既定パターンのどれかに完全一致する場合だけとする:
-  `npm|pnpm|yarn|bun test` / `… run <script>` / `npx vitest run` / `pytest [-q]` /
-  `tsc --noEmit` / `go test ./...` / `cargo test|check|clippy` / `make test|check|lint` /
-  `mvn|gradle test|verify|check` / `git status --porcelain` など。
+  `npm|pnpm|yarn|bun test` / `… run <script>` / `npx vitest run` / `pytest [-qxvs]` /
+  `tsc --noEmit` / `ruff check|mypy|eslint|shellcheck <path>` / `go test|vet ./...` /
+  `cargo test|check|clippy` / `make test|check|lint` / `mvn|gradle test|verify|check` /
+  `git status --porcelain|diff --exit-code|diff --quiet` など
+  (全体は `hooks/goal-gate.sh` の `VERIFY_RE` が正)。
   **コマンド名の先頭トークンだけで許可してはいけない**: `node` / `python` / `git` / `make` /
   `go` / `cargo` / `npx` は引数だけで任意コードを実行できる汎用ランナーであり、
   `node -e '…'`、`git -c alias.x='!…' x`、`make -f evil.mk`、`npx -y <pkg>` が
@@ -105,6 +107,9 @@ claude plugin install crystal@yuki --scope user
 - **完了条件を機械判定できない** → まだ `plan` か `spec` の段階。goal にしてはいけない
 - **来週も使う条件** → `spec` に書いて goal にインポートする(その場限りなら goal に直接書く)
 
+いずれも「これから何を作るか」を扱う。**既に決めたことの理由**は別軸で、
+`.claude/decisions.md` → `/crystal:adr` → `docs/adr/` が担当する([ADR](#adr-意思決定の記録))。
+
 ## 標準の開発フロー
 
 ```
@@ -113,7 +118,11 @@ claude plugin install crystal@yuki --scope user
   ↓ 以降は自走 (goal-gate が毎ターン判定 → 未達なら差し戻し)
 status: done           達成
 /crystal:learn         知見を learnings.md / evals/ に落とす (ここだけ人が叩く)
+/crystal:adr <テーマ>  「なぜこの構成にしたか」を docs/adr/ に残す (決定をした回だけ)
 ```
+
+作業中に決定をしたら、その場で `.claude/decisions.md` に書き残る(`rules/decision-log.md`)。
+`/crystal:adr` はそれを一次情報として読む。詳細は [ADR](#adr-意思決定の記録) を参照。
 
 ## ガードレール
 
@@ -186,6 +195,59 @@ goal-gate が担うのは後者だけで、前者は起動方法の選択にな�
 - `/crystal:learn` は 2 回以上再発した問題の eval ケース化を提案する
 - `crystal:verifier` は `evals/` があればランナーを実行し判定材料に含める
 
+## ADR (意思決定の記録)
+
+出典: [ADR 作成を Claude の Agent Skills で自動化する](https://blog.cybozu.io/entry/2026/07/28/090000)
+
+「なぜこの構成にしたのか」「他にどんな選択肢があって、なぜ採らなかったのか」を
+`docs/adr/NNNN-<slug>.md` に 1 決定 1 ファイルで残す。形式は `templates/adr.md`。
+
+記事が挙げる課題と、このリポジトリでの対応:
+
+| 記事の課題 | crystal での対応 |
+|---|---|
+| ADR 作成が後回しになり、書く頃には記憶が薄れている | `rules/decision-log.md` が**決定した瞬間に** `.claude/decisions.md` へ書かせる。ADR はそれを読んで後から起こす |
+| 材料が作業ログ・仕様書・実装コードに散らばっている | `/crystal:adr` の「1. 情報収集」が `decisions.md` / `docs/spec/` / `learnings.md` / `goal.md` の判定履歴 / `git log` / 実装を横断して集める |
+| いきなり全文を書くと方向がずれて手戻りが大きい | 「3. 内容確認」を**必須の合意チェックポイント**にし、項目ごとの骨子で合意してから清書する |
+| 過去 ADR と文体が揃わない | 「4. 清書」で既存 `docs/adr/*.md` を読み、文体・粒度を合わせる |
+
+記事が「鍵になる」としているのは skill ではなく**一次情報(作業ログ)が残っている文化**の方で、
+crystal に欠けていたのもそこだった。`.claude/learnings.md`(ハマりポイント)、`docs/spec/`
+(これから作るものの要件)、`goal.md` の判定履歴(未達の記録)はあったが、
+**採らなかった案とその理由**を残す場所がどこにも無く、決定の「なぜ」は毎回セッションと
+一緒に消えていた。`.claude/decisions.md` はその穴を埋める層で、
+散文で構わない代わりに**却下案と却下理由を必ず含める**ことだけを要求する。
+
+設計上の判断:
+
+- **`decisions.md` は SessionStart で注入しない**。`learnings.md` は「同じ問題を繰り返さない」
+  ために毎セッション読まれる必要があるが、決定ログの読み手は `/crystal:adr` だけで、
+  全セッションに載せてもコンテキストを食うだけになる。回収経路は
+  `/crystal:adr` の情報収集フェーズで閉じている
+- **hook で強制しない**。何が「後から理由を問われる決定」かは機械判定できず、
+  誤検知したゲートは決定でないものを書かせて `decisions.md` を薄める。
+  [rules/ の方針](#rules-の方針) の裏返しで、hook で強制できないものは rules に置く
+- **決定を変えるときは書き換えず `supersede`**。旧 ADR はステータス行だけを
+  `superseded by ADR-NNNN` に書き換え、本文は残す。上書きすると
+  「なぜ変えたか」が消え、ADR の存在価値そのものが失われる
+- **`decisions.md` は commit する**。`learnings.md` と同じチーム資産で、1 台の手元にしか
+  無い決定ログはチームの ADR を支えられない。`goal.md` を `.gitignore` に入れるのは
+  goal-gate がそこに書かれたコマンドを**実行する**ためで、何も実行しない
+  `decisions.md` には当てはまらない。untracked のまま放置するのだけが誤りで、
+  stop-gate の「変更なし判定」を汚す
+- **`decisions.md` は追記のみ・全文ロードしない**。`learnings.md` と同じく際限なく増えるが、
+  読み手が `/crystal:adr` だけなので注入側ではなく**読む側**で絞る。テーマで見出しを
+  絞り込み、ADR 化済み(`→ ADR-NNNN` マーカー付き)は飛ばし、32KB を超えたら
+  `.claude/decisions/YYYY.md` へ年分割する
+- **`goal-gate.jsonl` は `cwd` で絞ってから読む**。このログは `$HOME` 配下に
+  プロジェクト横断で積まれる。ADR は恒久文書なので、他プロジェクトの差し戻し理由が
+  却下理由として紛れ込むと後から出所を辿れない。`cwd` は goal-gate が全レコードに
+  記録する(回帰テストあり)。`/crystal:learn` の再発回数カウントも同じ理由で絞る
+- **裏が取れない項目は空けて出す**。記事も「記憶が薄れる問題は完全には解消されない」と
+  している。特に却下理由は記録に残りにくく最も捏造しやすいため、
+  `/crystal:adr` には材料が無い項目を「材料なし」と明示させ、
+  もっともらしい理由で埋めることを禁じてある。誤った ADR は無い ADR より害が大きい
+
 ## 更新
 
 リポジトリを編集したら、次の手順で反映する。注意点が 2 つある:
@@ -245,6 +307,8 @@ vitest で `goal-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learn
   際限なく増えるので末尾 8000 バイトまでを載せ、エントリの途中で切らないよう
   見出し行から始める。切り詰めた場合はその旨を明記する。
 - `audit-config.sh` は手動実行用スクリプトで、`hooks.json` には登録していない。
+- `.claude/decisions.md` は SessionStart で注入しない(読み手が `/crystal:adr` に限られるため)。
+  `learnings.md` との違いは [ADR](#adr-意思決定の記録) を参照。
 
 ## rules/ の方針
 

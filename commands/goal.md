@@ -63,12 +63,16 @@ goal-gate hook が Haiku で完了条件の達成を判定し、未達なら差�
    **実際に実行して**未達を機械的に確定させ、失敗していれば Haiku を呼ばずに差し戻す。
    形式は `${CLAUDE_PLUGIN_ROOT}/templates/goal.md` に従う:
    `` - [ ] DC-1: <観測可能な終了状態> — 検証: `<コマンド>` が <期待する結果> ``
-   実行されるのは、コマンド**全体**が既定パターンに完全一致する場合だけ:
+   実行されるのは、コマンド**全体**が既定パターンに完全一致する場合だけ
+   (正は `hooks/goal-gate.sh` の `VERIFY_RE`。ここは書き下しなので、
+   食い違ったら hook 側を正とすること):
    `npm|pnpm|yarn|bun test`、`npm run <script>`(`-s` 可、`-- <args>` 可)、
-   `npx vitest run`、`vitest run`、`jest`、`tsc --noEmit`、`pytest [-q] [path]`、
+   `npx [--no-install] vitest run|jest|tsc --noEmit|eslint .`、
+   `vitest run`、`jest`、`tsc --noEmit`、`pytest [-qxvs] [path...]`、
    `ruff check <path>`、`mypy <path>`、`eslint <path>`、`shellcheck <path>`、
-   `go test ./...`、`cargo test|check|clippy`、`make test|check|lint`、
-   `mvn|gradle test|verify|check`、`git status --porcelain`、`git diff --exit-code`。
+   `go test ./...`、`go vet ./...`、`cargo test|check|clippy`、`make test|check|lint`、
+   `mvn|gradle test|verify|check`、
+   `git status --porcelain`、`git diff --exit-code`、`git diff --quiet`。
    これ以外(`node -e` や `docker compose run` などを含む)は実行されず Haiku の読解に戻るため、
    **可能な限りこの形に落として書くこと**が判定の精度に直結する。
    落とせない場合は、その DC は機械判定されないことをユーザーに伝える。

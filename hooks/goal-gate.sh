@@ -36,8 +36,8 @@ mkdir -p "$LOG_DIR" 2>/dev/null
 warn() {
   # メッセージには検証コマンドの原文が入りうる。printf で埋め込むと " や \ で
   # JSON が壊れ、jsonl を読む側(/crystal:learn の差し戻し履歴集計など)が落ちる
-  jq -nc --arg ts "$(date -Iseconds)" --arg msg "$1" \
-    '{ts:$ts, level:"warn", msg:$msg}' >>"$LOG" 2>/dev/null
+  jq -nc --arg ts "$(date -Iseconds)" --arg cwd "$project_dir" --arg msg "$1" \
+    '{ts:$ts, cwd:$cwd, level:"warn", msg:$msg}' >>"$LOG" 2>/dev/null
 }
 
 # 移植性のあるタイムアウト。macOS には coreutils の timeout が無いため perl で代替する
@@ -317,9 +317,10 @@ unset CRYSTAL_GOAL_VERIFY
 
 if [ "$verify_failed" = "1" ]; then
   append_history "- r${round}: 未達 [${verify_unmet}] — 検証コマンドが失敗 (goal-gate が実行)"
-  jq -nc --arg ts "$(date -Iseconds)" --arg sid "$session_id" --argjson r "$round" \
+  jq -nc --arg ts "$(date -Iseconds)" --arg cwd "$project_dir" \
+    --arg sid "$session_id" --argjson r "$round" \
     --arg unmet "$verify_unmet" \
-    '{ts:$ts, session_id:$sid, round:$r, met:false, unmet:($unmet|split(", ")),
+    '{ts:$ts, cwd:$cwd, session_id:$sid, round:$r, met:false, unmet:($unmet|split(", ")),
       violations:[], reason:"検証コマンドが失敗", cost_usd:0, source:"verify"}' \
     >>"$LOG" 2>/dev/null
   {
@@ -421,11 +422,15 @@ if [ -n "$violations" ]; then
   met=false
 fi
 
-# --- 判定履歴を記録 (/learn の素材) ---
+# --- 判定履歴を記録 (/learn と /adr の素材) ---
+# cwd は必須: このログは $HOME 配下でプロジェクトをまたいで積まれるため、
+# これが無いと読む側が他プロジェクトの差し戻し履歴と区別できない
+# (/crystal:adr は却下理由の材料として読み、ADR という恒久文書に書き込む)。
 printf '%s' "$json" | jq -c \
-  --arg ts "$(date -Iseconds)" --arg sid "$session_id" --argjson r "$round" \
+  --arg ts "$(date -Iseconds)" --arg cwd "$project_dir" \
+  --arg sid "$session_id" --argjson r "$round" \
   --arg met "$met" --arg cost "${cost:-0}" \
-  '{ts:$ts, session_id:$sid, round:$r, met:($met=="true"), unmet:(.unmet // []), violations:(.violations // []), reason:(.reason // ""), cost_usd:($cost|tonumber?)}' \
+  '{ts:$ts, cwd:$cwd, session_id:$sid, round:$r, met:($met=="true"), unmet:(.unmet // []), violations:(.violations // []), reason:(.reason // ""), cost_usd:($cost|tonumber?)}' \
   >>"$LOG" 2>/dev/null
 
 # --- goal.md の「## 判定履歴」に追記 (直近5件。次ターン以降が読む外部メモリ) ---
