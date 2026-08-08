@@ -24,7 +24,17 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
 session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 own_marker=""
-[ -n "$session_id" ] && own_marker="$(crystal_state_dir)/${session_id}.stop-gate.blocked"
+checked_file=""
+if [ -n "$session_id" ]; then
+  own_marker="$(crystal_state_dir)/${session_id}.stop-gate.blocked"
+  checked_file="$(crystal_state_dir)/${session_id}.stop-gate.checked"
+fi
+
+record_checked() { # 現在のツリー状態を「検査済み」として記録する
+  [ -n "$checked_file" ] || return 0
+  mkdir -p "$(dirname "$checked_file")" 2>/dev/null &&
+    tree_digest >"$checked_file" 2>/dev/null
+}
 
 # --- 再帰防止: このフック自身による差し戻し後の再停止では素通しする ---
 # stop_hook_active は「どれかの Stop hook が差し戻した」フラグで、自分のものとは限らない。
@@ -36,16 +46,19 @@ if [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" 
   [ -n "$own_marker" ] || exit 0
   if [ -f "$own_marker" ]; then
     rm -f "$own_marker" 2>/dev/null
+    # 脱出口で通した状態も検査済みとして記録する。ベースライン方式では差分が
+    # セッション中ずっと残るため、記録が無いと同じ失敗で毎ターン差し戻し続ける
+    record_checked
     exit 0
   fi
 fi
 
 # --- 変更がなければゲート不要(質問応答セッション等) ---
-if git diff --quiet HEAD 2>/dev/null \
-  && git diff --cached --quiet 2>/dev/null \
-  && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-  exit 0
-fi
+# 比較の基点はセッション開始時点の HEAD (record-baseline.sh が記録)。
+# HEAD 比較のままだと、応答を終える前に commit するだけで「変更なし」になり、
+# テストを一度も実行しないまま完了できる
+changed=$(changed_files "$(session_baseline "$session_id")")
+[ -n "$changed" ] || exit 0
 
 # --- このセッションに作業痕跡が無ければゲート不要 ---
 # ツリーが汚れていても、それがセッション開始前からの汚れ (人間の書きかけ等) なら
@@ -66,6 +79,15 @@ if [ -n "$tp" ] && [ -f "$tp" ]; then
     fi
   fi
   [ "$did_work" = "1" ] || exit 0
+fi
+
+# --- 前回検査した状態と同一なら再検査しない ---
+# ベースライン方式では検証済みの変更がセッション中ずっと差分として残る。
+# 状態のダイジェストで判定しないと、検証後の会話だけのターンでも毎回フルテストが
+# 走り、待ち時間だけが積み上がってゲートごと無視される
+if [ -n "$checked_file" ] && [ -f "$checked_file" ] &&
+  [ "$(tree_digest)" = "$(cat "$checked_file" 2>/dev/null)" ]; then
+  exit 0
 fi
 
 FAILED=""
@@ -103,4 +125,7 @@ if [ -n "$FAILED" ]; then
   exit 2
 fi
 
+# 検査が通った状態を記録する (同一状態のままの停止では再検査しない)。
+# 検査自身が生成物 (キャッシュ等) を作ることがあるため、実行後の状態を記録する
+record_checked
 exit 0

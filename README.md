@@ -21,7 +21,7 @@ crystal のハーネス部分は、次の 5 つだけを目的にしている。
 | `skills/` | 自作スキル 11 個(ドメイン知識。ハーネスとは独立) |
 | `agents/` | `spec-critic`(目的 2), `verifier`(目的 3) |
 | `commands/` | `/spec`(2), `/learn`(5), `/adr`(1) |
-| `hooks/` | `hooks.json` + スクリプト 9 本 + 共有ライブラリ `lib/classify.sh` |
+| `hooks/` | `hooks.json` + スクリプト 11 本 + 共有ライブラリ `lib/classify.sh` |
 | `scripts/` | `adr-lint.sh`(目的 1 の構造検証) |
 | `rules/` | `testing.md`(4) / `learning.md`(5) / `decision-log.md`(1)。SessionStart hook が全セッションに注入 |
 | `templates/` | `spec.md`(2), `adr.md`(1) |
@@ -30,11 +30,13 @@ hook の内訳:
 
 | hook | イベント | 目的 |
 |---|---|---|
+| `doctor.sh` | SessionStart | `jq` / `git` / `node` の欠落を警告(fail-open なゲートの無症状死を検出) |
+| `record-baseline.sh` | SessionStart | セッション開始時点の HEAD を記録(ゲートの比較基点) |
 | `session-rules.sh` | SessionStart | `rules/*.md` を注入 |
 | `session-learnings.sh` | SessionStart | `.claude/learnings.md` を注入(目的 5 の回収) |
 | `change-gate.sh` | Stop | 実装に対するテスト / spec の欠落を差し戻す(目的 2・4) |
 | `verify-gate.sh` | Stop | 独立検証を通していない実装を差し戻す(目的 3) |
-| `stop-gate.sh` | Stop | 変更があればテスト・型チェック・lint を実行して差し戻す |
+| `stop-gate.sh` | Stop | 変更(commit 済み含む)があればテスト・型チェック・lint を実行して差し戻す。検査済みと同一のツリー状態では再実行しない |
 | `record-subagent-edits.sh` | SubagentStop | コードを変更したサブエージェントを記録する(目的 3 の補助) |
 | `subagent-gate.sh` | SubagentStop | 検証済みという完了報告の裏取り(目的 3 の補助) |
 | `format-on-save.sh` / `lint-changed.sh` | PostToolUse | 編集したファイルの整形と lint |
@@ -79,8 +81,8 @@ crystal:verifier       別文脈での独立検証 (verify-gate が呼ぶまで�
 
 目的 2 と目的 4 は、どちらも「差分の形」で機械判定できる。散文で頼まずここに置いてある。
 
-Stop のたびに変更ファイル(作業ツリー + index + 未追跡)を分類し、次のどちらかに当たれば
-exit 2 で差し戻す:
+Stop のたびに変更ファイル(**セッション開始時点の HEAD からの差分** + index + 未追跡)を
+分類し、次のどちらかに当たれば exit 2 で差し戻す:
 
 - 実装ファイルが変わったのに、**テストファイルが 1 つも変わっていない**
 - 実装ファイルが変わったのに、**`docs/spec/` が 1 つも変わっていない**
@@ -96,6 +98,13 @@ exit 2 で差し戻す:
 
 挙動の要点(なぜこの形かは各 ADR を参照):
 
+- **比較の基点はセッション開始時点の HEAD。** `record-baseline.sh`(SessionStart)が
+  状態ファイルに記録する。基点が常に HEAD だと、応答を終える前に `git commit` するだけで
+  差分が消えて全ゲートが沈黙する(敵対的レビューで実証された迂回経路)。commit 済みの
+  変更も判定対象に含める。記録できない環境では従来どおり HEAD 比較(fail-open)
+- **免除は同一の指摘にだけ効く。** ベースライン方式では免除済みの差分がセッション中
+  ずっと残るため、免除で通した指摘のダイジェストを記録し、同じ指摘のままの停止では
+  再差し戻ししない。指摘の内容が変わる(実装ファイルが増える等)と再び有効になる
 - **テストの中身が妥当かは見ない。** 空のテストを 1 つ置けば通る。中身は
   `stop-gate.sh`(実行して落ちるか)と `rules/testing.md`(何をテストするか)が担う。
   仕様と実装が一致しているかも見ない — ファイルが変わったかだけを見る
@@ -137,6 +146,8 @@ Stop のたびにメインセッションの transcript を読み、時系列に
 挙動の要点(構成そのものの理由は
 [ADR-0002](docs/adr/0002-enforce-verifier-via-stop-hook.md) を参照):
 
+- **比較の基点はセッション開始時点の HEAD**(change-gate と同じ)。commit 済みの実装も
+  独立検証の対象になる。commit しただけでは検証の強制から抜けられない
 - **`stop_hook_active` では素通ししない**(change-gate との意図的な設計差)。
   免除の余地がほとんど無く、verifier を呼べばその時点で印が `VERIFY` になって
   自然に通るため、ループにはならない
@@ -199,6 +210,12 @@ CRYSTAL-VERDICT: FAIL AC-2, AC-5
 機械で止めることはできない。同様に、検証後のサブエージェント起動は「調査のみ」と
 述べれば通る。ハーネス全体がこの線引き(黙って省くのは止まる、偽って通るのは
 止まらない)の上に立っている。
+
+線引きの内側にも既知の残存経路が 1 つある: インタープリタのスクリプト実行による
+ファイル生成(`python gen.py --out src/a.ts` 等)は、コマンド文字列から書き込みの
+有無を判定できないため、どのゲートの変更痕跡にもならない。`cp` / `mv` / `rsync` /
+`find -exec sed -i` / `xargs sed -i` / `git merge` / `git cherry-pick` は
+`BASH_WRITE_RE` が検出する。
 
 ## 並行エージェント実行時の検証
 
@@ -330,9 +347,11 @@ npm install
 npm test
 ```
 
-vitest で `change-gate.sh` / `verify-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` / `session-learnings.sh` /
-`adr-lint.sh` の振る舞いをテストしている。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
-壊れても手動 E2E では気づけない。`change-gate.sh` と `adr-lint.sh` は逆に**誤検出しないこと**が
+vitest で `change-gate.sh` / `verify-gate.sh` / `stop-gate.sh` / `subagent-gate.sh` /
+`record-baseline.sh` / `doctor.sh` / `session-learnings.sh` / `adr-lint.sh` の振る舞いを
+テストしている。GitHub Actions(`.github/workflows/test.yml`)が push / PR ごとに
+`npm test` と hook の構文検査を実行する。ゲートは fail-open 設計(異常時は黙って exit 0)なので、
+壊れても手動 E2E では気づけない — CI がこの回帰スイートを強制する唯一の構造的な守りになる。`change-gate.sh` と `adr-lint.sh` は逆に**誤検出しないこと**が
 要件で、ドキュメント修正のたびにテストを要求するようになるとゲートごと無視されるため、
 正常系も明示的に押さえている。`tests/helpers/sandbox.ts` が使い捨ての git リポジトリを作る。
 
@@ -344,7 +363,9 @@ vitest で `change-gate.sh` / `verify-gate.sh` / `stop-gate.sh` / `subagent-gate
 
 ## 前提
 
-- hooks は `node` / `jq` / `git` が PATH にあることを前提とする。
+- hooks は `node` / `jq` / `git` が PATH にあることを前提とする。ゲートは fail-open の
+  ため、欠けている環境では検査されずに素通しになる。`doctor.sh`(SessionStart)が
+  欠落を検出してセッション開始時に警告する。
 - `rules/` は SessionStart hook(`session-rules.sh`)が注入するため、プラグインを
   有効化するだけで適用される。外部の CLAUDE.md からの参照は不要。
 - プロジェクトの `.claude/learnings.md` も SessionStart hook(`session-learnings.sh`)が

@@ -135,3 +135,79 @@
 - 影響範囲: `hooks/change-gate.sh`, `hooks/stop-gate.sh`, `hooks/lib/classify.sh`
   → ADR-0006
 
+
+## 2026-08-08: ゲートの比較基点を「セッション開始時点の HEAD」に固定する
+
+- 決めたこと: `record-baseline.sh`(SessionStart)がセッション開始時点の HEAD を
+  状態ファイル(`<session_id>.baseline`)に記録し、change-gate / verify-gate /
+  stop-gate は `changed_files` の基点にこれを使う(commit 済みの変更も判定対象になる)。
+  記録できない環境では従来どおり HEAD 比較にフォールバックする(fail-open)。
+- 理由: 敵対的レビューで「応答を終える前に `git commit` するだけで 3 つの Stop ゲートが
+  全て沈黙する」ことが実証された。commit はタスク完了と同義の通常運転(リモート
+  セッションでは必須)で、「欺瞞は止めない」という保証範囲の外側 = 止めるべき側にある。
+- 採らなかった案:
+  - **transcript から `git commit` コマンドを検出して差分に足す**: commit の検出は
+    できても「何が commit されたか」は transcript からは復元できず、結局 git に
+    問い合わせる基点が要る。基点を 1 つ記録する方が単純で頑健。
+  - **既定ブランチとの merge-base を基点にする**: 長生きブランチでは他人の変更まで
+    差分に含まれ、セッションと無関係な指摘で毎ターン差し戻す誤検知になる。
+  - **resume / compact の SessionStart で基点を進める**: そのセッションで commit 済みの
+    変更が判定から漏れる。既存の記録があれば上書きしない形にした。
+- 影響範囲: `hooks/record-baseline.sh`(新規), `hooks/lib/classify.sh`,
+  `hooks/change-gate.sh`, `hooks/verify-gate.sh`, `hooks/stop-gate.sh`, `hooks/hooks.json`
+
+## 2026-08-08: ベースライン方式の再差し戻しはダイジェスト記録で抑える
+
+- 決めたこと: ベースライン方式では解消済み・免除済みの差分がセッション中ずっと残るため、
+  (a) change-gate は免除で通した指摘のダイジェスト(対象実装ファイル + 欠けている対)を
+  記録して同一の指摘では再差し戻ししない、(b) stop-gate は検査が通ったツリー状態の
+  ダイジェスト(HEAD + 追跡差分 + 未追跡の中身)を記録して同一状態では再検査しない。
+- 理由: 記録が無いと、免除後・検証後の会話だけのターンでも毎回差し戻し/フルテストが
+  走り、「会話のたびに鳴る警報」になってゲートごと無視される(既存設計が最も
+  避けてきた失敗モード)。
+- 採らなかった案:
+  - **ゲート通過時にベースラインを進める**: Stop hook は並列に走るため、片方のゲートが
+    基点を進めると他方の未解決の指摘が消える競合が起きる。基点は不変にし、
+    ゲートごとの記録で吸収した。
+  - **時間ベースの抑制(N 分間は再検査しない)**: 状態が変わったのに検査しない
+    見逃しと、変わっていないのに検査する無駄の両方を生む。状態のダイジェストなら
+    どちらも起きない。
+  - **cksum ではなく sha256 等**: 衝突耐性は不要(敵対的に衝突させる動機が無い)で、
+    依存を増やさない方を優先した。
+- 影響範囲: `hooks/lib/classify.sh`(`crystal_digest` / `tree_digest`),
+  `hooks/change-gate.sh`, `hooks/stop-gate.sh`
+
+## 2026-08-08: BASH_WRITE_RE の盲点拡張と verifier 判定の限定
+
+- 決めたこと: (a) `BASH_WRITE_RE` に `cp` / `mv` / `rsync` / `truncate` / `ln` /
+  `git merge|cherry-pick|pull|rebase` / `find・xargs 経由の sed/perl -i` を追加。
+  (b) verify-gate の verifier 判定を部分一致(`verifier` を含む)から
+  `(^|[:/])verifier$` に限定。(c) verify-gate の差し戻しメッセージから
+  `CRYSTAL_VERIFY_GATE=off` の案内を除去(人間向けの README には残す)。
+- 理由: (a) は敵対的レビューで素通りが実証された系統(「生成したファイルを cp で
+  配置する」は欺瞞ですらない普通のワークフロー)。(b) は判定行の契約を持たない他所の
+  「〜verifier〜」エージェントで VERIFY 印が立ち、「判定行が読めないときは 1 度で
+  諦める」経路から抜けられるため。(c) は監督される側に監督の外し方を教える誘引で、
+  除去しても人間の kill switch は失われない。
+- 採らなかった案:
+  - **すべての Bash 実行を書き換え候補とみなす**: change-gate のスコープが常にツリー
+    全体に広がり、stop-gate が会話ターンでも走る誤検知の害が上回る。
+  - **インタープリタ実行(`python gen.py` 等)も検出する**: コマンド文字列から
+    書き込みの有無は判定できない。既知の残存経路として README に明記するに留めた。
+- 影響範囲: `hooks/lib/classify.sh`, `hooks/verify-gate.sh`, README
+
+## 2026-08-08: ハーネス自身の死活は doctor.sh(SessionStart)と CI で守る
+
+- 決めたこと: (a) `doctor.sh` が SessionStart で `jq` / `git` / `node` の欠落を検出し、
+  警告をコンテキストに注入する(jq 非依存で実装)。(b) GitHub Actions が push / PR ごとに
+  `npm test` + hook の構文検査(`bash -n` / `node --check`)を実行する。
+- 理由: 全ゲートが fail-open のため、依存欠落や構文エラーで「プラグイン全体が無症状で
+  死ぬ」。README 自身が「壊れても手動 E2E では気づけない」と認めながら、それを検出する
+  仕組みが無かった。
+- 採らなかった案:
+  - **ゲート側で依存欠落時に exit 2**: fail-open をやめると、依存の無い環境で
+    全ターン差し戻しになり plugin ごと外される。検査は素通しのまま、警告だけを出す。
+  - **CI に shellcheck を追加**: 実行環境で事前検証できず(バイナリ取得がプロキシで
+    拒否される)、未検証の lint を CI に入れると初回から赤になるリスクがある。
+    構文検査(`bash -n`)のみ入れ、shellcheck は将来の改善とした。
+- 影響範囲: `hooks/doctor.sh`(新規), `hooks/hooks.json`, `.github/workflows/test.yml`

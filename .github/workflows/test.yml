@@ -1,0 +1,32 @@
+# このリポジトリのゲートは fail-open 設計 (異常時は黙って exit 0) のため、
+# 壊れても手動 E2E では気づけない。テストを PR で強制する CI が唯一の構造的な守りになる。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # hook は fail-open なので、構文エラーは実行時に「全ゲート沈黙」として現れる。
+      # bash -n / node --check で構文だけは commit 時点で落とす
+      - name: syntax check hooks
+        run: |
+          set -e
+          for f in hooks/*.sh hooks/lib/*.sh scripts/*.sh; do
+            if head -1 "$f" | grep -q node; then
+              node --check < "$f"
+            else
+              bash -n "$f"
+            fi
+          done

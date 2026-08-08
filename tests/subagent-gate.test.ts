@@ -75,12 +75,20 @@ describe("subagent-gate.sh", () => {
       expect(r.exitCode).toBe(2);
     });
 
-    // Write だけを見ていると、編集ツールを使わずに書き換えたエージェントを取りこぼす
+    // Write だけを見ていると、編集ツールを使わずに書き換えたエージェントを取りこぼす。
+    // cp / mv / rsync / find -exec / xargs 経由は敵対的レビューで素通りが実証された系統
     for (const [label, command] of [
       ["sed -i", "sed -i '' 's/a/b/' src/foo.ts"],
       ["リダイレクト", 'echo "x" > src/foo.ts'],
       ["tee", 'echo "x" | tee src/foo.ts'],
       ["git apply", "git apply /tmp/p.patch"],
+      ["cp", "cp /tmp/generated.ts src/foo.ts"],
+      ["mv", "mv /tmp/new.ts src/foo.ts"],
+      ["rsync", "rsync -a build/ src/"],
+      ["git merge", "git merge feature-branch"],
+      ["git cherry-pick", "git cherry-pick abc1234"],
+      ["find -exec sed -i", "find src -name '*.ts' -exec sed -i 's/a/b/' {} +"],
+      ["xargs sed -i", "xargs sed -i 's/a/b/' < files.txt"],
     ] as const) {
       it(`Bash の ${label} でファイルを書き換えた場合も裏取りの対象になる`, () => {
         const r = runSubagentGate({
